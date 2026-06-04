@@ -231,18 +231,17 @@ export class Renderer {
   /** タイトル背景をcontainで収め、ロゴ・4色キャラを背景に対する割合で配置 */
   private layoutTitle(): void {
     if (!this.titleLoaded) return;
-    const { vw, vh, safeTop } = this.layout;
+    const { vw, vh } = this.layout;
     const tex = this.titleBgSprite.texture;
-    // 画面いっぱい（contain）の大きさは保ったまま、ステータスバーぶんだけ下へずらす
-    const s = Math.min(vw / tex.width, vh / tex.height);
+    // cover：画面全体を埋める（はみ出しは切る）＋中央寄せ。画像が画面とほぼ同比率なのでクロップは数px
+    const s = Math.max(vw / tex.width, vh / tex.height);
     const bw = tex.width * s;
     const bh = tex.height * s;
-    const shift = safeTop; // ノッチ/ステータスバーを避けて少し下げる
     const bx = (vw - bw) / 2;
-    const by = (vh - bh) / 2 + shift;
+    const by = (vh - bh) / 2;
     // 背景
     this.titleBgSprite.scale.set(s);
-    this.titleBgSprite.position.set(vw / 2, vh / 2 + shift);
+    this.titleBgSprite.position.set(vw / 2, vh / 2);
     this.titleBgRect = { x: bx, y: by, w: bw, h: bh };
     // ロゴ（横幅を背景の82%に・上寄り）
     const logoTex = this.titleLogoSprite.texture;
