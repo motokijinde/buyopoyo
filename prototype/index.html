@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<!-- iPhone最適化: ズーム禁止・フルスクリーン・Safe Area対応 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>ぶよぽよ（プロトタイプ）</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; height:100%;
+    background:#1a1030;
+    overflow:hidden;
+    /* タッチ操作特化: スクロール/選択/長押しメニュー/ダブルタップズーム抑止 */
+    touch-action:none;
+    -webkit-user-select:none; user-select:none;
+    -webkit-touch-callout:none;
+    -webkit-tap-highlight-color:transparent;
+    overscroll-behavior:none;
+  }
+  #game {
+    display:block;
+    width:100vw; height:100vh;
+    width:100dvw; height:100dvh; /* アドレスバー変動対策 */
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+(() => {
+"use strict";
+
+// =====================================================================
+//  ぶよぽよ プロトタイプ
+//  - ロジック(盤面/重力/消去/連鎖/得点) と 描画/入力 をなるべく分離
+//  - 仮グラフィック: コードで丸＋お目目を描画、同色隣接はブリッジで連結表現
+//  - 手触り(操作性)のパラメータは TUNE にまとめて、触りながら調整できるように
+// =====================================================================
+
+// ---- チューニング可能パラメータ（実機で触りながら調整するやつ） ----
+const TUNE = {
+  baseFallMs: 800,      // レベル1の1段落下時間(ms)
+  fallDecay: 0.85,      // レベルごとの落下加速率
+  minFallMs: 90,        // 落下時間の下限
+  softFallMs: 40,       // ソフトドロップ時の1段落下時間
+  lockMs: 350,          // 設置猶予(着地してから固定までの猶予)
+  clearMs: 260,         // 消去アニメの長さ
+  dropMs: 130,          // 連鎖落下アニメの待ち
+  tapMaxDist: 14,       // タップ判定の最大移動量(px)
+  tapMaxMs: 250,        // タップ判定の最大時間(ms)
+  gestureThresh: 10,    // 縦横どちらのジェスチャーか確定する移動量(px)
+  flickDropMs: 220,     // この時間内の下フリックはハードドロップ
+  clearPerLevel: 30,    // 何個消したらレベル+1
+};
+
+// ---- 盤面定数 ----
+const COLS = 6;
+const VISIBLE_ROWS = 12;
+const HIDDEN_ROWS = 1;            // 上に隠し段1段（出現バッファ）
+const ROWS = VISIBLE_ROWS + HIDDEN_ROWS; // row0=隠し段, row1..12=見える
+const NUM_COLORS = 4;
+
+const COLORS = [
+  { name:'red',    body:'#ff5a6a', hi:'#ffb3bd', dk:'#c8323f', cheek:'#ff8a96' },
+  { name:'yellow', body:'#ffce3a', hi:'#fff0a8', dk:'#d99e10', cheek:'#ffe07a' },
+  { name:'green',  body:'#4fd16b', hi:'#aef0bd', dk:'#249a43', cheek:'#86e39a' },
+  { name:'purple', body:'#b06bdb', hi:'#e0bff2', dk:'#7a3ba8', cheek:'#cd9ae8' },
+];
+
+// =====================================================================
+//  ゲーム状態
+// =====================================================================
+const G = {
+  phase:'title',          // title | control | resolving | gameover
+  board:null,             // board[r][c] = null | {color, yOff, pop}
+  piece:null,             // 操作中の組ぶよ
+  next:null,              // 次の組ぶよ [axisColor, childColor]
+  score:0,
+  cleared:0,              // 累計消去数
+  level:1,
+  chain:0,                // 現在の解決での連鎖数
+  chainShow:0,            // 表示用の連鎖数(演出)
+  chainShowT:0,
+  fallTimer:0,
+  lockTimer:0,
+  softDrop:false,
+  resolve:{ sub:'idle', timer:0, groups:[] },
+  shake:0,
+  best: +(localStorage.getItem('buyopoyo_best')||0),
+};
+
+function emptyBoard(){
+  return Array.from({length:ROWS}, () => Array(COLS).fill(null));
+}
+
+function randColor(){ return Math.floor(Math.random()*NUM_COLORS); }
+function newPair(){ return [randColor(), randColor()]; }
+
+function resetGame(){
+  G.board = emptyBoard();
+  G.score = 0; G.cleared = 0; G.level = 1; G.chain = 0;
+  G.chainShow = 0; G.chainShowT = 0;
+  G.next = newPair();
+  spawnPiece();
+}
+
+// ---- 組ぶよの出現 ----
+function spawnPiece(){
+  const [a,c] = G.next;
+  G.next = newPair();
+  G.piece = {
+    col:2, row:1, or:0,      // or: 0=上,1=右,2=下,3=左（子ぶよの位置）
+    axis:a, child:c,
+    visualX:2, visualY:1,
+  };
+  G.fallTimer = 0; G.lockTimer = 0;
+  // 出現位置が埋まってたら窒息(ゲームオーバー)
+  if(!cellFree(1,2) || !cellFree(0,2)){
+    gameOver();
+  } else {
+    G.phase = 'control';
+  }
+}
+
+function gameOver(){
+  G.phase = 'gameover';
+  if(G.score > G.best){ G.best = G.score; localStorage.setItem('buyopoyo_best', G.best); }
+}
+
+// ---- 子ぶよの座標 ----
+function childPos(col,row,or){
+  if(or===0) return [row-1, col];
+  if(or===1) return [row, col+1];
+  if(or===2) return [row+1, col];
+  return [row, col-1];
+}
+function inBounds(r,c){ return c>=0 && c<COLS && r>=0 && r<ROWS; }
+function cellFree(r,c){ return inBounds(r,c) && G.board[r][c]===null; }
+
+// 軸+子の両方が置けるか
+function pieceFits(col,row,or){
+  const [cr,cc] = childPos(col,row,or);
+  return cellFree(row,col) && cellFree(cr,cc);
+}
+
+// =====================================================================
+//  操作（ロジック側）
+// =====================================================================
+function tryMove(dCol){
+  const p=G.piece; if(!p) return;
+  const step = Math.sign(dCol);
+  let n = Math.abs(dCol);
+  while(n-- > 0){
+    if(pieceFits(p.col+step, p.row, p.or)) p.col += step;
+    else break;
+  }
+}
+
+function tryRotate(dir){ // dir: +1=時計, -1=反時計
+  const p=G.piece; if(!p) return;
+  const nor = ((p.or + dir) % 4 + 4) % 4;
+  // 壁蹴り: そのまま→左へ1→右へ1→上へ1 の順で置けるとこを探す
+  const kicks = [[0,0],[0,-1],[0,1],[-1,0]];
+  for(const [dr,dc] of kicks){
+    if(pieceFits(p.col+dc, p.row+dr, nor)){
+      p.col += dc; p.row += dr; p.or = nor; p.visualX = p.col;
+      return true;
+    }
+  }
+  return false;
+}
+
+function canMoveDown(){
+  const p=G.piece;
+  return pieceFits(p.col, p.row+1, p.or);
+}
+
+function hardDrop(){
+  const p=G.piece; if(!p) return;
+  while(canMoveDown()) p.row++;
+  G.lockTimer = TUNE.lockMs; // 即固定
+}
+
+function lockPiece(){
+  const p=G.piece;
+  const [cr,cc] = childPos(p.col,p.row,p.or);
+  G.board[p.row][p.col] = { color:p.axis, yOff:0, pop:0 };
+  G.board[cr][cc]       = { color:p.child, yOff:0, pop:0 };
+  G.piece = null;
+  // ちぎり対応: まず重力を適用してから消去判定へ
+  applyGravity();
+  G.phase = 'resolving';
+  G.chain = 0;
+  G.resolve = { sub:'drop', timer:TUNE.dropMs, groups:[] };
+}
+
+// =====================================================================
+//  重力・消去・連鎖（ロジック側）
+// =====================================================================
+function applyGravity(){
+  for(let c=0;c<COLS;c++){
+    let write = ROWS-1;
+    for(let r=ROWS-1;r>=0;r--){
+      const cell=G.board[r][c];
+      if(cell){
+        if(r!==write){
+          cell.yOff += (r-write)*cellSize; // 上から滑り落ちる演出(負の値)
+          G.board[write][c]=cell; G.board[r][c]=null;
+        }
+        write--;
+      }
+    }
+  }
+}
+
+// 同色4つ以上の連結グループを探す
+function findGroups(){
+  const seen = Array.from({length:ROWS},()=>Array(COLS).fill(false));
+  const groups=[];
+  for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+    if(seen[r][c] || !G.board[r][c]) continue;
+    const color=G.board[r][c].color;
+    const stack=[[r,c]]; const cells=[]; seen[r][c]=true;
+    while(stack.length){
+      const [y,x]=stack.pop(); cells.push([y,x]);
+      for(const [dy,dx] of [[1,0],[-1,0],[0,1],[0,-1]]){
+        const ny=y+dy,nx=x+dx;
+        if(inBounds(ny,nx)&&!seen[ny][nx]&&G.board[ny][nx]&&G.board[ny][nx].color===color){
+          seen[ny][nx]=true; stack.push([ny,nx]);
+        }
+      }
+    }
+    if(cells.length>=4) groups.push({color, cells});
+  }
+  return groups;
+}
+
+// 連鎖ボーナス表
+function chainBonus(n){
+  const t=[0,0,8,16,32,64,96,128,160,192,224];
+  if(n<=10) return t[n];
+  return 224 + (n-10)*32;
+}
+// 連結ボーナス: 4→0,5→2,6→3,7→4,8→5,9→6,10→7,11+→10
+function connectBonusExact(size){
+  const t={4:0,5:2,6:3,7:4,8:5,9:6,10:7};
+  if(size>=11) return 10;
+  return t[size]!==undefined ? t[size] : 0;
+}
+function colorBonus(nColors){
+  return [0,0,3,6,12][Math.min(nColors,4)];
+}
+
+// 1回の消去ステップの得点を加算
+function scoreStep(groups){
+  let totalCleared=0, connect=0;
+  const colorSet=new Set();
+  for(const g of groups){
+    totalCleared += g.cells.length;
+    connect += connectBonusExact(g.cells.length);
+    colorSet.add(g.color);
+  }
+  const cb = chainBonus(G.chain);
+  const colb = colorBonus(colorSet.size);
+  let bonus = cb + connect + colb;
+  if(bonus===0) bonus = 1;
+  G.score += 10 * totalCleared * bonus;
+  G.cleared += totalCleared;
+  G.level = 1 + Math.floor(G.cleared / TUNE.clearPerLevel);
+}
+
+// 解決フェーズの1ステップ進行
+function resolveStep(){
+  const groups = findGroups();
+  if(groups.length===0){
+    // 連鎖終了
+    G.phase='control';
+    spawnPiece();
+    return;
+  }
+  G.chain++;
+  G.chainShow = G.chain; G.chainShowT = 900;
+  if(G.chain>=2) G.shake = Math.min(14, 4 + G.chain*2);
+  scoreStep(groups);
+  // 消すセルにpopアニメ開始
+  for(const g of groups) for(const [r,c] of g.cells){
+    if(G.board[r][c]) G.board[r][c].pop = 0.0001;
+  }
+  G.resolve = { sub:'clear', timer:TUNE.clearMs, groups };
+}
+
+// =====================================================================
+//  更新ループ
+// =====================================================================
+function update(dt){
+  // 揺れ・連鎖表示の減衰
+  G.shake *= Math.pow(0.001, dt/1000);
+  if(G.shake<0.3) G.shake=0;
+  if(G.chainShowT>0) G.chainShowT-=dt;
+
+  if(G.phase==='control'){
+    const p=G.piece;
+    // なめらか補間
+    const k = 1-Math.exp(-dt/55);
+    p.visualX += (p.col - p.visualX)*k;
+    p.visualY += (p.row - p.visualY)*k;
+
+    const fallMs = G.softDrop ? Math.min(TUNE.softFallMs, levelFallMs())
+                              : levelFallMs();
+    G.fallTimer += dt;
+    if(G.fallTimer >= fallMs){
+      G.fallTimer = 0;
+      if(canMoveDown()) p.row++;
+    }
+    // 設置猶予
+    if(!canMoveDown()){
+      G.lockTimer += dt;
+      if(G.lockTimer >= TUNE.lockMs) lockPiece();
+    } else {
+      G.lockTimer = 0;
+    }
+  }
+  else if(G.phase==='resolving'){
+    const R=G.resolve;
+    R.timer -= dt;
+    if(R.sub==='clear'){
+      // popを進める
+      for(const g of R.groups) for(const [r,c] of g.cells){
+        if(G.board[r][c]) G.board[r][c].pop = 1 - R.timer/TUNE.clearMs;
+      }
+      if(R.timer<=0){
+        // 実際に消す→重力
+        for(const g of R.groups) for(const [r,c] of g.cells) G.board[r][c]=null;
+        applyGravity();
+        G.resolve = { sub:'drop', timer:TUNE.dropMs, groups:[] };
+      }
+    } else if(R.sub==='drop'){
+      if(R.timer<=0) resolveStep();
+    }
+  }
+
+  // 全セルの落下オフセットをイーズ
+  const ek = 1-Math.exp(-dt/45);
+  for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+    const cell=G.board[r][c];
+    if(cell && cell.yOff!==0){
+      cell.yOff += (0-cell.yOff)*ek;
+      if(Math.abs(cell.yOff)<0.5) cell.yOff=0;
+    }
+  }
+}
+
+function levelFallMs(){
+  return Math.max(TUNE.minFallMs, TUNE.baseFallMs*Math.pow(TUNE.fallDecay, G.level-1));
+}
+
+// =====================================================================
+//  描画
+// =====================================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let DPR=1, VW=0, VH=0;
+let cellSize=40, boardX=0, boardTop=0, hudTop=0;
+let safeTop=0, safeBottom=0;
+
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2.5);
+  VW = window.innerWidth; VH = window.innerHeight;
+  canvas.width = Math.floor(VW*DPR);
+  canvas.height = Math.floor(VH*DPR);
+  canvas.style.width=VW+'px'; canvas.style.height=VH+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+
+  safeTop = env('top'); safeBottom = env('bottom');
+
+  const hudH = 86 + safeTop;     // 上部HUD
+  const footH = 30 + safeBottom; // 下部余白
+  const availH = VH - hudH - footH;
+  const availW = VW - 16;
+  // セルサイズ: 横6 と 縦12+ヘッドルーム1 に収まる最大
+  cellSize = Math.floor(Math.min(availW/COLS, availH/(VISIBLE_ROWS+1)));
+  const boardW = cellSize*COLS;
+  boardX = Math.floor((VW - boardW)/2);
+  hudTop = safeTop;
+  boardTop = hudH + cellSize; // 上に隠し段ぶんのヘッドルーム
+}
+function env(side){
+  // env(safe-area-inset-*) を読む小技
+  const probe=document.createElement('div');
+  probe.style.cssText=`position:fixed;${side}:env(safe-area-inset-${side});`;
+  document.body.appendChild(probe);
+  const v=parseFloat(getComputedStyle(probe)[side])||0;
+  probe.remove(); return v;
+}
+
+// row,colのセル中心スクリーン座標
+function cellCX(c){ return boardX + c*cellSize + cellSize/2; }
+function cellCY(r){ return boardTop + (r-1)*cellSize + cellSize/2; }
+
+function draw(){
+  ctx.clearRect(0,0,VW,VH);
+  // 背景
+  const bg=ctx.createLinearGradient(0,0,0,VH);
+  bg.addColorStop(0,'#241647'); bg.addColorStop(1,'#140a28');
+  ctx.fillStyle=bg; ctx.fillRect(0,0,VW,VH);
+
+  if(G.phase==='title'){ drawTitle(); return; }
+
+  // 画面シェイク
+  ctx.save();
+  if(G.shake>0){
+    ctx.translate((Math.random()-0.5)*G.shake, (Math.random()-0.5)*G.shake);
+  }
+
+  drawBoardFrame();
+  drawBoardPuyos();
+  if(G.piece) drawPiece();
+  ctx.restore();
+
+  drawHUD();
+  if(G.chainShowT>0) drawChainPopup();
+  if(G.phase==='gameover') drawGameOver();
+}
+
+function drawBoardFrame(){
+  const w=cellSize*COLS, h=cellSize*VISIBLE_ROWS;
+  // 盤面の中（暗め）
+  ctx.fillStyle='rgba(8,4,20,0.55)';
+  roundRect(boardX-4, boardTop-4, w+8, h+8, 10); ctx.fill();
+  // 極薄グリッド
+  ctx.strokeStyle='rgba(255,255,255,0.04)'; ctx.lineWidth=1;
+  for(let c=0;c<=COLS;c++){ line(boardX+c*cellSize, boardTop, boardX+c*cellSize, boardTop+h); }
+  for(let r=0;r<=VISIBLE_ROWS;r++){ line(boardX, boardTop+r*cellSize, boardX+w, boardTop+r*cellSize); }
+  // 枠
+  ctx.strokeStyle='rgba(255,255,255,0.18)'; ctx.lineWidth=3;
+  roundRect(boardX-4, boardTop-4, w+8, h+8, 10); ctx.stroke();
+
+  // 出現列の危険サイン
+  if(G.board && (G.board[3] && G.board[3][2] || (G.board[4]&&G.board[4][2]))){
+    ctx.strokeStyle='rgba(255,80,80,'+(0.3+0.2*Math.sin(performance.now()/150))+')';
+    ctx.lineWidth=3; roundRect(boardX-4, boardTop-4, w+8, h+8, 10); ctx.stroke();
+  }
+}
+
+// 同色の隣接を繋ぐブリッジ（連結プレビュー）
+function drawBridges(){
+  for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+    const cell=G.board[r][c]; if(!cell||cell.pop>0) continue;
+    const col=COLORS[cell.color];
+    // 右
+    if(c+1<COLS && G.board[r][c+1] && G.board[r][c+1].color===cell.color && G.board[r][c+1].pop===0
+       && G.board[r][c+1].yOff===cell.yOff){
+      ctx.fillStyle=col.body;
+      const x=cellCX(c), y=cellCY(r)+cell.yOff;
+      roundRect(x, y-cellSize*0.28, cellSize, cellSize*0.56, cellSize*0.18); ctx.fill();
+    }
+    // 下
+    if(r+1<ROWS && G.board[r+1][c] && G.board[r+1][c].color===cell.color && G.board[r+1][c].pop===0
+       && G.board[r+1][c].yOff===cell.yOff){
+      ctx.fillStyle=col.body;
+      const x=cellCX(c), y=cellCY(r)+cell.yOff;
+      roundRect(x-cellSize*0.28, y, cellSize*0.56, cellSize, cellSize*0.18); ctx.fill();
+    }
+  }
+}
+
+function drawBoardPuyos(){
+  drawBridges();
+  for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+    const cell=G.board[r][c]; if(!cell) continue;
+    drawPuyo(cellCX(c), cellCY(r)+cell.yOff, cell.color, cell.pop, 'normal');
+  }
+}
+
+function drawPiece(){
+  const p=G.piece;
+  const ax=boardX+p.visualX*cellSize+cellSize/2;
+  const ay=boardTop+(p.visualY-1)*cellSize+cellSize/2;
+  const [cr,cc]=childPos(p.col,p.row,p.or);
+  // 子ぶよ位置を軸からのオフセットで（補間軸基準）
+  const dx=(cc-p.col)*cellSize, dy=(cr-p.row)*cellSize;
+  drawPuyo(ax+dx, ay+dy, p.child, 0, 'normal');
+  drawPuyo(ax, ay, p.axis, 0, 'normal');
+}
+
+// ぶよ1個（仮グラ: 丸＋ツヤ＋お目目）
+function drawPuyo(cx, cy, colorIdx, pop, mood){
+  const col=COLORS[colorIdx];
+  const R=cellSize*0.46;
+  ctx.save();
+  ctx.translate(cx,cy);
+  if(pop>0){
+    // 消去アニメ: 縮みながらフラッシュ＆フェード
+    const s=1-pop; ctx.globalAlpha=Math.max(0,1-pop);
+    ctx.scale(s,s);
+    if(pop<0.5){ ctx.shadowColor='#fff'; ctx.shadowBlur=20; }
+  }
+  // 本体
+  const g=ctx.createRadialGradient(-R*0.3,-R*0.4,R*0.2, 0,0,R*1.1);
+  g.addColorStop(0,col.hi); g.addColorStop(0.45,col.body); g.addColorStop(1,col.dk);
+  ctx.fillStyle=g;
+  ctx.beginPath(); ctx.arc(0,0,R,0,Math.PI*2); ctx.fill();
+  // ほっぺ
+  ctx.fillStyle=col.cheek; ctx.globalAlpha*=0.6;
+  ctx.beginPath(); ctx.arc(-R*0.45,R*0.25,R*0.16,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( R*0.45,R*0.25,R*0.16,0,Math.PI*2); ctx.fill();
+  ctx.globalAlpha=(pop>0?Math.max(0,1-pop):1);
+  // ツヤ
+  ctx.fillStyle='rgba(255,255,255,0.55)';
+  ctx.beginPath(); ctx.ellipse(-R*0.32,-R*0.42,R*0.26,R*0.16,-0.5,0,Math.PI*2); ctx.fill();
+  // お目目
+  const eyeY=-R*0.1, eyeX=R*0.32, er=R*0.22;
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.arc(-eyeX,eyeY,er,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( eyeX,eyeY,er,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#2a1530';
+  const pr=er*0.55;
+  ctx.beginPath(); ctx.arc(-eyeX+pr*0.3,eyeY,pr,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( eyeX+pr*0.3,eyeY,pr,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+// ---- HUD ----
+function drawHUD(){
+  ctx.textBaseline='top';
+  // スコア
+  ctx.fillStyle='#fff'; ctx.font='bold 13px -apple-system,sans-serif';
+  ctx.textAlign='left';
+  ctx.fillText('SCORE', 16, hudTop+8);
+  ctx.font='bold 26px -apple-system,sans-serif';
+  ctx.fillText(String(G.score).padStart(0), 16, hudTop+24);
+  // BEST / LEVEL
+  ctx.textAlign='right'; ctx.font='bold 11px -apple-system,sans-serif';
+  ctx.fillStyle='rgba(255,255,255,0.7)';
+  ctx.fillText('BEST '+G.best, VW-16, hudTop+8);
+  ctx.fillText('LEVEL '+G.level, VW-16, hudTop+24);
+  // NEXT
+  ctx.textAlign='right'; ctx.fillStyle='rgba(255,255,255,0.7)';
+  ctx.font='bold 11px -apple-system,sans-serif';
+  ctx.fillText('NEXT', VW-70, hudTop+44);
+  if(G.next){
+    const nx=VW-44, ny=hudTop+60;
+    drawMini(nx, ny, G.next[1]);      // 子ぶよ（上）
+    drawMini(nx, ny+24, G.next[0]);   // 軸ぶよ（下）
+  }
+}
+function drawMini(cx,cy,colorIdx){
+  const col=COLORS[colorIdx], R=11;
+  const g=ctx.createRadialGradient(cx-3,cy-4,2,cx,cy,R*1.1);
+  g.addColorStop(0,col.hi);g.addColorStop(.45,col.body);g.addColorStop(1,col.dk);
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(cx,cy,R,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#fff';
+  ctx.beginPath();ctx.arc(cx-4,cy-1,3,0,7);ctx.fill();
+  ctx.beginPath();ctx.arc(cx+4,cy-1,3,0,7);ctx.fill();
+  ctx.fillStyle='#2a1530';
+  ctx.beginPath();ctx.arc(cx-3,cy-1,1.5,0,7);ctx.fill();
+  ctx.beginPath();ctx.arc(cx+5,cy-1,1.5,0,7);ctx.fill();
+}
+
+function drawChainPopup(){
+  if(G.chainShow<2) return;
+  const a=Math.min(1, G.chainShowT/300);
+  ctx.save();
+  ctx.globalAlpha=a;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  const cx=VW/2, cy=boardTop+cellSize*VISIBLE_ROWS*0.4;
+  const sc=1+0.3*(1-a);
+  ctx.translate(cx,cy); ctx.scale(sc,sc);
+  ctx.fillStyle='#fff'; ctx.strokeStyle='#ff5a6a'; ctx.lineWidth=5;
+  ctx.font='bold 54px -apple-system,sans-serif';
+  ctx.strokeText(G.chainShow+' れんさ', 0, 0);
+  ctx.fillText(G.chainShow+' れんさ', 0, 0);
+  ctx.restore();
+}
+
+function drawTitle(){
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  // ロゴ風
+  const cx=VW/2, cy=VH*0.36;
+  // 飾りぶよ
+  const sv=cellSize; cellSize=46;
+  drawPuyo(cx-90, cy-70, 0,0,'normal');
+  drawPuyo(cx-30, cy-86, 1,0,'normal');
+  drawPuyo(cx+30, cy-86, 2,0,'normal');
+  drawPuyo(cx+90, cy-70, 3,0,'normal');
+  cellSize=sv;
+  ctx.fillStyle='#fff'; ctx.font='bold 56px -apple-system,sans-serif';
+  ctx.fillText('ぶよぽよ', cx, cy);
+  ctx.font='13px -apple-system,sans-serif'; ctx.fillStyle='rgba(255,255,255,0.6)';
+  ctx.fillText('プロトタイプ', cx, cy+44);
+  ctx.font='bold 18px -apple-system,sans-serif'; ctx.fillStyle='#ffce3a';
+  const blink=0.5+0.5*Math.sin(performance.now()/400);
+  ctx.globalAlpha=blink;
+  ctx.fillText('タップでスタート', cx, VH*0.62);
+  ctx.globalAlpha=1;
+  // 操作説明
+  ctx.font='12px -apple-system,sans-serif'; ctx.fillStyle='rgba(255,255,255,0.55)';
+  ctx.fillText('左右ドラッグ=移動 / タップ=回転(左半=反時計,右半=時計)', cx, VH*0.74);
+  ctx.fillText('下フリック=一気に落とす / 下に長め=ソフト落下', cx, VH*0.74+20);
+}
+
+function drawGameOver(){
+  ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(0,0,VW,VH);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle='#fff'; ctx.font='bold 44px -apple-system,sans-serif';
+  ctx.fillText('ゲームオーバー', VW/2, VH*0.4);
+  ctx.font='bold 22px -apple-system,sans-serif';
+  ctx.fillText('SCORE '+G.score, VW/2, VH*0.4+50);
+  ctx.font='bold 16px -apple-system,sans-serif'; ctx.fillStyle='#ffce3a';
+  const blink=0.5+0.5*Math.sin(performance.now()/400);
+  ctx.globalAlpha=blink;
+  ctx.fillText('タップでもう一回', VW/2, VH*0.55);
+  ctx.globalAlpha=1;
+}
+
+// ---- 描画ユーティリティ ----
+function roundRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+function line(x1,y1,x2,y2){ ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); }
+
+// =====================================================================
+//  入力（タッチ・ジェスチャー）
+// =====================================================================
+let touch=null;
+function onDown(x,y){
+  if(G.phase==='title'){ resetGame(); return; }
+  if(G.phase==='gameover'){ resetGame(); return; }
+  touch={ sx:x, sy:y, t:performance.now(), mode:null, baseCol:G.piece?G.piece.col:0, lastDy:0 };
+}
+function onMove(x,y){
+  if(!touch || G.phase!=='control') return;
+  const dx=x-touch.sx, dy=y-touch.sy;
+  if(!touch.mode && Math.hypot(dx,dy) > TUNE.gestureThresh){
+    touch.mode = Math.abs(dx) > Math.abs(dy) ? 'horiz' : 'vert';
+  }
+  if(touch.mode==='horiz'){
+    const target = touch.baseCol + Math.round(dx/cellSize);
+    const cur=G.piece.col;
+    if(target!==cur) tryMove(target-cur);
+  } else if(touch.mode==='vert'){
+    G.softDrop = dy>0;
+  }
+  touch.lastDy=dy;
+}
+function onUp(x,y){
+  if(!touch){ return; }
+  G.softDrop=false;
+  if(G.phase==='control'){
+    const dt=performance.now()-touch.t;
+    const dx=x-touch.sx, dy=y-touch.sy;
+    const dist=Math.hypot(dx,dy);
+    if(!touch.mode && dt<TUNE.tapMaxMs && dist<TUNE.tapMaxDist){
+      // タップ=回転（左半分=反時計, 右半分=時計）
+      tryRotate(x < VW/2 ? -1 : +1);
+    } else if(touch.mode==='vert' && dy > cellSize*1.2 && dt < TUNE.flickDropMs){
+      // 下フリック=ハードドロップ
+      hardDrop();
+    }
+  }
+  touch=null;
+}
+
+// Pointer Events（タッチ/マウス両対応）
+canvas.addEventListener('pointerdown', e=>{ e.preventDefault(); onDown(e.clientX,e.clientY); }, {passive:false});
+canvas.addEventListener('pointermove', e=>{ e.preventDefault(); onMove(e.clientX,e.clientY); }, {passive:false});
+canvas.addEventListener('pointerup',   e=>{ e.preventDefault(); onUp(e.clientX,e.clientY); }, {passive:false});
+canvas.addEventListener('pointercancel', ()=>{ G.softDrop=false; touch=null; });
+// iOS Safari保険: ダブルタップズーム/ジェスチャ抑止
+document.addEventListener('gesturestart', e=>e.preventDefault());
+document.addEventListener('dblclick', e=>e.preventDefault());
+
+// バックグラウンドで自動ポーズ（タイマー暴走防止）
+let lastT=performance.now();
+document.addEventListener('visibilitychange', ()=>{ lastT=performance.now(); });
+
+// =====================================================================
+//  メインループ
+// =====================================================================
+function loop(now){
+  let dt=now-lastT; lastT=now;
+  if(dt>100) dt=100; // タブ復帰時のジャンプ抑制
+  if(G.phase!=='title') update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', ()=>setTimeout(resize,200));
+resize();
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
