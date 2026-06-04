@@ -15,6 +15,7 @@ import { stepScore } from "./scoring.ts";
 import {
   type ColorId,
   COLS,
+  HIDDEN_ROWS,
   NUM_COLORS,
   type Orientation,
   type Phase,
@@ -52,6 +53,8 @@ export interface GameEvents {
   /** 連鎖の各ステップ。chain=連鎖数(1始まり), gained=このステップの得点 */
   onChainStep?: (chain: number, gained: number) => void;
   onChainEnd?: (totalChain: number) => void;
+  /** 連鎖の結果、盤面が空になったとき（得点には反映しない・演出のみ） */
+  onAllClear?: () => void;
   onGameOver?: (score: number) => void;
 }
 
@@ -110,16 +113,26 @@ export class Game {
   private spawn(): void {
     const [a, c] = this.next;
     this.next = this.randomPair();
-    this.piece = { col: SPAWN_COL, row: 1, orientation: 0, axis: a, child: c };
+    const top = HIDDEN_ROWS; // 見える最上段（軸=ここ, 子=1つ上）
+    // 軸の出現行を決める：通常は見える最上段。埋まっていたら1段ハミ出して出現（粘り）。
+    // 軸・子の両方が空いている行を上から探し、無ければ窒息。
+    let row = -1;
+    for (const r of [top, top - 1]) {
+      if (this.grid[r][SPAWN_COL] === null && this.grid[r - 1][SPAWN_COL] === null) {
+        row = r;
+        break;
+      }
+    }
+    if (row === -1) {
+      this.piece = null;
+      this.gameOver();
+      return;
+    }
+    this.piece = { col: SPAWN_COL, row, orientation: 0, axis: a, child: c };
     this.fallTimer = 0;
     this.lockTimer = 0;
-    const [cr, cc] = childPos(SPAWN_COL, 1, 0);
-    if (this.grid[1][SPAWN_COL] !== null || this.grid[cr][cc] !== null) {
-      this.gameOver();
-    } else {
-      this.phase = "control";
-      this.events.onSpawn?.();
-    }
+    this.phase = "control";
+    this.events.onSpawn?.();
   }
 
   private gameOver(): void {
@@ -202,6 +215,15 @@ export class Game {
     this.resolveTimer = this.cfg.dropMs;
   }
 
+  private isBoardEmpty(): boolean {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (this.grid[r][c] !== null) return false;
+      }
+    }
+    return true;
+  }
+
   private fallMs(): number {
     const base = Math.max(
       this.cfg.minFallMs,
@@ -215,6 +237,7 @@ export class Game {
     const groups = findGroups(this.grid);
     if (groups.length === 0) {
       const total = this.chain;
+      if (total > 0 && this.isBoardEmpty()) this.events.onAllClear?.();
       this.events.onChainEnd?.(total);
       this.spawn();
       return;

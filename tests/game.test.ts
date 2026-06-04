@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Game } from "../src/core/game.ts";
-import { type ColorId, COLS, ROWS } from "../src/core/types.ts";
+import { type ColorId, COLS, HIDDEN_ROWS, ROWS } from "../src/core/types.ts";
 
 const R: ColorId = 0;
 const G: ColorId = 2;
@@ -90,6 +90,47 @@ describe("Game: ゲームオーバー", () => {
     game.setGridForTest(layout(cells));
     // 現在のピースを別の列(col4)で着地させ→解決→次のspawnで窒息
     game.piece = { col: 4, row: 1, orientation: 0, axis: R, child: G };
+    game.hardDrop();
+    for (let i = 0; i < 4000 && !over; i++) game.update(16);
+    expect(over).toBe(true);
+    expect(game.phase).toBe("gameover");
+  });
+
+  it("出現列が見える12段フルでも、まだ窒息せず1段ハミ出して出現できる（粘り）", () => {
+    const game = new Game();
+    game.start();
+    let over = false;
+    game.events.onGameOver = () => {
+      over = true;
+    };
+    // col2 の見える12段(row2..13)をフルに（隠し段 row0,row1 は空）
+    const cells: Array<[number, number, ColorId]> = [];
+    for (let r = HIDDEN_ROWS; r <= ROWS - 1; r++) cells.push([r, 2, r % 2 === 0 ? R : G]);
+    game.setGridForTest(layout(cells));
+    // 別列に置いて解決→次spawn。col2は満タンでもハミ出し段に出現できるので窒息しない
+    game.piece = { col: 4, row: HIDDEN_ROWS, orientation: 0, axis: R, child: G };
+    game.hardDrop();
+    runUntilControl(game);
+    expect(over).toBe(false);
+    expect(game.phase).toBe("control");
+    // ハミ出し段（見える最上段の1つ上＝隠し段）に出現している
+    expect(game.piece?.col).toBe(2);
+    expect(game.piece?.row).toBe(HIDDEN_ROWS - 1);
+  });
+
+  it("ハミ出し段まで埋まって初めて窒息する", () => {
+    const game = new Game();
+    game.start();
+    let over = false;
+    game.events.onGameOver = () => {
+      over = true;
+    };
+    // col2 を見える12段＋ハミ出し1段（row1..13）まで埋める
+    const cells: Array<[number, number, ColorId]> = [];
+    for (let r = HIDDEN_ROWS - 1; r <= ROWS - 1; r++) cells.push([r, 2, r % 2 === 0 ? R : G]);
+    game.setGridForTest(layout(cells));
+    // 別列に置いて解決→次spawn。col2はハミ出し段も埋まっているので窒息
+    game.piece = { col: 4, row: HIDDEN_ROWS, orientation: 0, axis: R, child: G };
     game.hardDrop();
     for (let i = 0; i < 4000 && !over; i++) game.update(16);
     expect(over).toBe(true);

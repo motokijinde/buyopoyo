@@ -6,8 +6,8 @@ export type ColorId = 0 | 1 | 2 | 3;
 export const NUM_COLORS = 4;
 export const COLS = 6;
 export const VISIBLE_ROWS = 12;
-export const HIDDEN_ROWS = 1; // 上に隠し段1段（出現バッファ）
-export const ROWS = VISIBLE_ROWS + HIDDEN_ROWS; // row0=隠し段, row1..12=見える
+export const HIDDEN_ROWS = 2; // 上に隠し段2段（出現＋ハミ出し猶予のバッファ）
+export const ROWS = VISIBLE_ROWS + HIDDEN_ROWS; // row0,1=隠し段, row2..13=見える
 export const SPAWN_COL = 2; // 左から3列目
 
 /** 盤面セル：null=空、数値=色 */
