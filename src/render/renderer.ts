@@ -14,6 +14,8 @@ import {
 
 const TEX_SIZE = 128;
 const LAND_MS = 240; // 着地スクワッシュの長さ
+// 背景画像 game_bg.png のフレーム内側（プレイ領域）の位置：画像に対する割合
+const GAME_BG = { left: 0.1995, right: 0.7946, top: 0.1598, bottom: 0.8613 };
 
 interface Layout {
   vw: number;
@@ -40,6 +42,8 @@ export class Renderer {
   private particleTex!: Texture;
 
   private bgSprite = new Sprite(Texture.WHITE);
+  private gameBgSprite = new Sprite();
+  private gameBgLoaded = false;
   private titleLayer = new Container();
   private titleBgSprite = new Sprite();
   private titleLogoSprite = new Sprite();
@@ -111,15 +115,15 @@ export class Renderer {
     parent.appendChild(app.canvas);
     const r = new Renderer(app);
     r.build();
-    await r.loadTitle();
+    await r.loadImages();
     r.resize();
     return r;
   }
 
-  /** タイトル素材（背景・ロゴ）を読み込む（失敗時は文字タイトルにフォールバック） */
-  private async loadTitle(): Promise<void> {
+  /** 画像素材を読み込む（失敗してもフォールバックで動く） */
+  private async loadImages(): Promise<void> {
+    const base = import.meta.env.BASE_URL;
     try {
-      const base = import.meta.env.BASE_URL;
       const [bg, logo] = await Promise.all([
         Assets.load(`${base}back.png`),
         Assets.load(`${base}moji.png`),
@@ -130,6 +134,12 @@ export class Renderer {
     } catch {
       this.titleLoaded = false;
     }
+    try {
+      this.gameBgSprite.texture = await Assets.load(`${base}game_bg.png`);
+      this.gameBgLoaded = true;
+    } catch {
+      this.gameBgLoaded = false;
+    }
   }
 
   private build(): void {
@@ -138,6 +148,7 @@ export class Renderer {
 
     this.app.stage.addChild(this.bgSprite);
     this.app.stage.addChild(this.world);
+    this.world.addChild(this.gameBgSprite); // 盤面の最背面（フレーム画像）
     this.world.addChild(this.frameGfx);
     this.world.addChild(this.dangerGfx);
     this.world.addChild(this.bridgeGfx);
@@ -223,9 +234,29 @@ export class Renderer {
     this.layout = { vw, vh, cell, boardX, boardTop, hudH, safeTop, safeBottom };
 
     this.drawBackground();
+    this.layoutGameBg();
     this.drawFrame();
     this.layoutHud();
     this.layoutTitle();
+  }
+
+  /** 背景フレーム画像を、内側（プレイ領域）が盤面グリッドにぴったり重なるよう配置（横は非正方マスに合わせ微伸長） */
+  private layoutGameBg(): void {
+    if (!this.gameBgLoaded) return;
+    const { cell, boardX, boardTop } = this.layout;
+    const iwF = GAME_BG.right - GAME_BG.left;
+    const ihF = GAME_BG.bottom - GAME_BG.top;
+    const gridW = COLS * cell;
+    const gridH = (VISIBLE_ROWS + HIDDEN_ROWS) * cell;
+    const drawnW = gridW / iwF;
+    const drawnH = gridH / ihF;
+    const tex = this.gameBgSprite.texture;
+    this.gameBgSprite.scale.set(drawnW / tex.width, drawnH / tex.height);
+    // 内側の左上(GAME_BG.left, top)がグリッド左上（猶予ゾーンの上端）に来るよう原点をずらす
+    this.gameBgSprite.position.set(
+      boardX - GAME_BG.left * drawnW,
+      boardTop - HIDDEN_ROWS * cell - GAME_BG.top * drawnH,
+    );
   }
 
   /** タイトル背景をcontainで収め、ロゴ・4色キャラを背景に対する割合で配置 */
@@ -312,13 +343,15 @@ export class Renderer {
   }
 
   private drawFrame(): void {
+    const g = this.frameGfx;
+    g.clear();
+    // 背景フレーム画像があるときは自前の枠・グリッド・猶予ゾーンは描かない（画像が担う）
+    if (this.gameBgLoaded) return;
     const { cell, boardX, boardTop } = this.layout;
     const w = cell * COLS;
     const h = cell * VISIBLE_ROWS;
     const zoneH = HIDDEN_ROWS * cell; // 上の猶予（危険）ゾーン
     const topY = boardTop - zoneH;
-    const g = this.frameGfx;
-    g.clear();
     // 盤面＋猶予ゾーン全体の下地（暗め）
     g.roundRect(boardX - 4, topY - 4, w + 8, h + zoneH + 8, 12).fill({ color: "#0a0418", alpha: 0.55 });
     // 猶予ゾーンをうっすら警告色に（ここまで積むと窒息＝はみ出し置き場）
