@@ -1,0 +1,17 @@
+{
+  "name": "ぶよぽよ",
+  "short_name": "ぶよぽよ",
+  "description": "ぷよぷよ初代オマージュの落ち物パズル（iPhone向けWebアプリ）",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#140a28",
+  "theme_color": "#140a28",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

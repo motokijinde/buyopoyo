@@ -216,7 +216,10 @@ export class Renderer {
     // 見える12段＋猶予ゾーン(隠し段)ぶんの高さを確保
     const cell = Math.floor(Math.min(availW / COLS, availH / (VISIBLE_ROWS + HIDDEN_ROWS)));
     const boardX = Math.floor((vw - cell * COLS) / 2);
-    const boardTop = hudH + HIDDEN_ROWS * cell;
+    // 盤面（猶予ゾーン込み）を上下中央に：余り高さを上下へ均等配分
+    const totalH = (VISIBLE_ROWS + HIDDEN_ROWS) * cell;
+    const pad = Math.floor((availH - totalH) / 2);
+    const boardTop = hudH + pad + HIDDEN_ROWS * cell;
     this.layout = { vw, vh, cell, boardX, boardTop, hudH, safeTop, safeBottom };
 
     this.drawBackground();
@@ -228,9 +231,10 @@ export class Renderer {
   /** タイトル背景をcontainで収め、ロゴ・4色キャラを背景に対する割合で配置 */
   private layoutTitle(): void {
     if (!this.titleLoaded) return;
-    const { vw, vh } = this.layout;
+    const { vw, vh, safeTop, safeBottom } = this.layout;
     const tex = this.titleBgSprite.texture;
-    const s = Math.min(vw / tex.width, vh / tex.height);
+    // 高さはセーフエリアぶん控えて収め、画面中央に置く＝上下の隙間が均等に
+    const s = Math.min(vw / tex.width, (vh - safeTop - safeBottom) / tex.height);
     const bw = tex.width * s;
     const bh = tex.height * s;
     const bx = (vw - bw) / 2;
