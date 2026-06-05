@@ -58,6 +58,12 @@ export class Renderer {
   private titleBtnBase = { x: 0, y: 0, w: 0, h: 0, scale: 1 };
   private btnPressT = -1;
   private btnPressCallback: (() => void) | null = null;
+  private gameoverBtnSprites = [new Sprite(), new Sprite(), new Sprite()];
+  private gameoverBtnTexts: Text[] = [];
+  private gameoverBtnBases = [0, 1, 2].map(() => ({ x: 0, y: 0, w: 0, h: 0, scale: 1 }));
+  private gameoverBtnPressTs = [-1, -1, -1];
+  private gameoverBtnCallbacks: Array<(() => void) | null> = [null, null, null];
+  private gameoverBtnsLoaded = false;
   private introActive = false; // スタート演出（ジングル再生）中
   private introStart = 0;
   private world = new Container();
@@ -165,6 +171,19 @@ export class Renderer {
       this.gameoverLoaded = false;
     }
     try {
+      const [green, purple, red] = await Promise.all([
+        Assets.load(`${base}button-green.png`),
+        Assets.load(`${base}button-purple.png`),
+        Assets.load(`${base}button-red.png`),
+      ]);
+      this.gameoverBtnSprites[0].texture = green;
+      this.gameoverBtnSprites[1].texture = purple;
+      this.gameoverBtnSprites[2].texture = red;
+      this.gameoverBtnsLoaded = true;
+    } catch {
+      this.gameoverBtnsLoaded = false;
+    }
+    try {
       const [st, bt, lt, nt] = await Promise.all([
         Assets.load(`${base}score.png`),
         Assets.load(`${base}best.png`),
@@ -239,6 +258,14 @@ export class Renderer {
     this.titleBtnSprite.anchor.set(0.5);
     this.titleBtnText = new Text({ text: "START", style: { fill: "#ffffff", fontSize: 24, fontFamily: font, fontWeight: "bold", stroke: { color: "#996600", width: 5 } } });
     this.titleBtnText.anchor.set(0.5);
+    const goLabels = ["REPLAY", "SCORE", "MENU"];
+    const goStrokes = ["#1a5500", "#441188", "#881100"];
+    for (let i = 0; i < 3; i++) {
+      const t = new Text({ text: goLabels[i], style: { fill: "#ffffff", fontSize: 24, fontFamily: font, fontWeight: "bold", stroke: { color: goStrokes[i], width: 5 } } });
+      t.anchor.set(0.5);
+      this.gameoverBtnTexts.push(t);
+      this.gameoverBtnSprites[i].anchor.set(0.5);
+    }
 
     this.hud.addChild(this.scoreLabelText, this.scoreText, this.bestText);
     this.hud.addChild(this.levelLabelText, this.levelText);
@@ -269,6 +296,13 @@ export class Renderer {
     this.gameoverSprite.anchor.set(0.5);
     this.gameoverSprite.alpha = 0;
     this.app.stage.addChild(this.gameoverSprite);
+    // ゲームオーバーボタン（gameoverSpriteより前面、HUDより背面）
+    for (let i = 0; i < 3; i++) {
+      this.gameoverBtnSprites[i].visible = false;
+      this.app.stage.addChild(this.gameoverBtnSprites[i]);
+      this.gameoverBtnTexts[i].visible = false;
+      this.app.stage.addChild(this.gameoverBtnTexts[i]);
+    }
     // HUD/オーバーレイ文字（タップでスタート等）はタイトル画像より前面に
     this.app.stage.addChild(this.hud);
   }
@@ -305,6 +339,7 @@ export class Renderer {
     this.drawFrame();
     this.layoutHud();
     this.layoutTitle();
+    this.layoutGameoverBtns();
   }
 
   /** 背景フレーム画像を、内側（プレイ領域）が盤面グリッドにぴったり重なるよう配置（横は非正方マスに合わせ微伸長） */
@@ -365,7 +400,7 @@ export class Renderer {
     this.titleBtnSprite.scale.set(btnScale);
     this.titleBtnSprite.position.set(btnX, btnY);
     this.titleBtnText.style.fontSize = Math.round(Math.min(btnH * 0.42, btnW * 0.18));
-    this.titleBtnText.position.set(btnX, btnY);
+    this.titleBtnText.position.set(btnX, btnY - btnH * 0.10);
   }
 
   /** タイトルのアニメ：通常=ぷるぷる揺れ＋まばたき／スタート演出中=にっこりピョコ＆ロゴ拡大 */
@@ -429,6 +464,70 @@ export class Renderer {
     this.titleBtnText.scale.set(this.btnPressT >= 0 ? btnScale / b.scale : 1);
   }
 
+  private layoutGameoverBtns(): void {
+    if (!this.gameoverBtnsLoaded) return;
+    const { vw, vh } = this.layout;
+    const btnW = vw * 0.48;
+    const cx = vw / 2;
+    let y = vh * 0.46;
+    for (let i = 0; i < 3; i++) {
+      const tex = this.gameoverBtnSprites[i].texture;
+      const sc = btnW / tex.width;
+      const btnH = tex.height * sc;
+      y += btnH / 2;
+      this.gameoverBtnBases[i] = { x: cx, y, w: btnW, h: btnH, scale: sc };
+      this.gameoverBtnSprites[i].scale.set(sc);
+      this.gameoverBtnSprites[i].position.set(cx, y);
+      this.gameoverBtnTexts[i].style.fontSize = Math.round(Math.min(btnH * 0.42, btnW * 0.18));
+      this.gameoverBtnTexts[i].position.set(cx, y - btnH * 0.10);
+      y += btnH / 2 + 32;
+    }
+  }
+
+  private updateGameoverBtns(dtMs: number): void {
+    for (let i = 0; i < 3; i++) {
+      const b = this.gameoverBtnBases[i];
+      let sc = b.scale;
+      if (this.gameoverBtnPressTs[i] >= 0) {
+        this.gameoverBtnPressTs[i] += dtMs;
+        const PRESS = 80, BOUNCE = 100, SETTLE = 60, TOTAL = PRESS + BOUNCE + SETTLE;
+        const t = this.gameoverBtnPressTs[i];
+        let factor: number;
+        if (t < PRESS) factor = 1 - 0.12 * (t / PRESS);
+        else if (t < PRESS + BOUNCE) factor = 0.88 + 0.2 * ((t - PRESS) / BOUNCE);
+        else if (t < TOTAL) factor = 1.08 - 0.08 * ((t - PRESS - BOUNCE) / SETTLE);
+        else {
+          factor = 1;
+          const cb = this.gameoverBtnCallbacks[i];
+          this.gameoverBtnPressTs[i] = -1;
+          this.gameoverBtnCallbacks[i] = null;
+          cb?.();
+        }
+        sc = b.scale * factor;
+        this.gameoverBtnTexts[i].scale.set(factor);
+      } else {
+        this.gameoverBtnTexts[i].scale.set(1);
+      }
+      this.gameoverBtnSprites[i].scale.set(sc);
+    }
+  }
+
+  tryPressGameoverBtn(clientX: number, clientY: number, onReplay: () => void, onMenu: () => void): boolean {
+    if (!this.gameoverBtnsLoaded) return false;
+    const callbacks = [onReplay, (): void => { /* SCORE: 未実装 */ }, onMenu];
+    for (let i = 0; i < 3; i++) {
+      if (this.gameoverBtnPressTs[i] >= 0) continue;
+      const b = this.gameoverBtnBases[i];
+      const hw = b.w / 2, hh = b.h / 2;
+      if (clientX >= b.x - hw && clientX <= b.x + hw && clientY >= b.y - hh && clientY <= b.y + hh) {
+        this.gameoverBtnPressTs[i] = 0;
+        this.gameoverBtnCallbacks[i] = callbacks[i];
+        return true;
+      }
+    }
+    return false;
+  }
+
   private drawLevelMeter(game: Game, dtMs: number): void {
     const MAX_LEVEL = 10;
     const BLOCKS = 8;
@@ -442,9 +541,6 @@ export class Renderer {
     const cx = vw / 2;
     const bw = 14, bh = 14, gap = 3;
     const lh = 26;
-    const levelTh = this.levelLabelSprite.texture.height || 1024;
-    const levelTw = this.levelLabelSprite.texture.width || 1536;
-    const lw = Math.round(levelTw * (lh / levelTh));
     const totalW = BLOCKS * bw + (BLOCKS - 1) * gap;
     const startX = cx - totalW / 2 + 10;
     const y = top + lh + 10;
@@ -619,7 +715,13 @@ export class Renderer {
 
     // ゲームオーバー経過（灰色化の進み具合に使う）
     if (game.phase === "gameover") {
-      if (this.prevPhase !== "gameover") this.gameOverT = 0;
+      if (this.prevPhase !== "gameover") {
+        this.gameOverT = 0;
+        for (let i = 0; i < 3; i++) {
+          this.gameoverBtnPressTs[i] = -1;
+          this.gameoverBtnCallbacks[i] = null;
+        }
+      }
       this.gameOverT += dtMs;
     }
     this.prevPhase = game.phase;
@@ -972,8 +1074,8 @@ export class Renderer {
     const tex = sprite.texture;
     const FALL_MS = 480;
     const t = this.gameOverT;
-    const targetY = vh * 0.40;
-    const s = Math.min(vw * 0.85 / tex.width, vh * 0.42 / tex.height);
+    const targetY = vh * 0.28;
+    const s = Math.min(vw * 0.85 / tex.width, vh * 0.32 / tex.height);
     sprite.scale.set(s);
     sprite.x = vw / 2;
 
@@ -1009,7 +1111,13 @@ export class Renderer {
     if (game.phase !== "title") this.introActive = false; // 遷移したら演出終了
     this.titleLayer.visible = game.phase === "title" && this.titleLoaded;
     // ゲームオーバー以外のフェーズではスプライトを隠す
-    if (game.phase !== "gameover") this.gameoverSprite.alpha = 0;
+    if (game.phase !== "gameover") {
+      this.gameoverSprite.alpha = 0;
+      for (let i = 0; i < 3; i++) {
+        this.gameoverBtnSprites[i].visible = false;
+        this.gameoverBtnTexts[i].visible = false;
+      }
+    }
     const { vw, vh } = this.layout;
     if (game.phase === "title") {
       if (this.titleLoaded) this.updateTitle(dtMs);
@@ -1031,21 +1139,26 @@ export class Renderer {
       this.titleBtnText.visible = this.titleLoaded && !this.introActive;
     } else if (game.phase === "gameover") {
       if (this.gameoverLoaded) this.updateGameoverAnim(vw, vh);
-      this.overlayText.visible = true;
-      this.subText.visible = true;
-      if (this.gameoverLoaded) {
-        this.overlayText.text = `SCORE  ${game.score}`;
-        this.overlayText.style.fontSize = 32;
-        this.overlayText.position.set(vw / 2, vh * 0.60);
+      const showBtns = this.gameoverBtnsLoaded;
+      for (let i = 0; i < 3; i++) {
+        this.gameoverBtnSprites[i].visible = showBtns;
+        this.gameoverBtnTexts[i].visible = showBtns;
+      }
+      if (showBtns) {
+        this.updateGameoverBtns(dtMs);
+        this.overlayText.visible = false;
+        this.subText.visible = false;
       } else {
-        this.overlayText.text = `ゲームオーバー\nSCORE ${game.score}`;
+        this.overlayText.visible = true;
+        this.overlayText.text = "ゲームオーバー";
         this.overlayText.style.fontSize = 38;
         this.overlayText.position.set(vw / 2, vh * 0.42);
+        this.subText.visible = true;
+        this.subText.style.fontSize = 18;
+        this.subText.text = "タップでもう一回";
+        this.subText.alpha = 0.5 + 0.5 * Math.sin(this.timeMs / 400);
+        this.subText.position.set(vw / 2, vh * 0.58);
       }
-      this.subText.style.fontSize = 18;
-      this.subText.text = "タップでもう一回";
-      this.subText.alpha = 0.5 + 0.5 * Math.sin(this.timeMs / 400);
-      this.subText.position.set(vw / 2, vh * 0.68);
     } else {
       this.overlayText.visible = false;
       this.subText.visible = false;

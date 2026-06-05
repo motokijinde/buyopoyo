@@ -53,7 +53,8 @@ async function main(): Promise<void> {
     // 安全策：万一endedが来なくても最長で開始
     setTimeout(go, 8000);
   };
-  new GestureInput(renderer.app.canvas, game, renderer, beginStart);
+  const goTitle = (): void => game.goTitle();
+  new GestureInput(renderer.app.canvas, game, renderer, beginStart, goTitle);
 
   // リサイズ
   window.addEventListener("resize", () => renderer.resize());

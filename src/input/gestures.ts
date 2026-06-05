@@ -34,6 +34,7 @@ export class GestureInput {
     private game: Game,
     private renderer: Renderer,
     private onStartOrRetry: () => void,
+    private onGoTitle: () => void,
     private tune: GestureTune = DEFAULT_GESTURE_TUNE,
   ) {
     canvas.addEventListener("pointerdown", this.onDown, { passive: false });
@@ -51,7 +52,7 @@ export class GestureInput {
       return;
     }
     if (this.game.phase === "gameover") {
-      this.onStartOrRetry();
+      this.renderer.tryPressGameoverBtn(e.clientX, e.clientY, this.onStartOrRetry, this.onGoTitle);
       return;
     }
     this.touch = {

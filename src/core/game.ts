@@ -97,6 +97,10 @@ export class Game {
     return [this.randomColor(), this.randomColor()];
   }
 
+  goTitle(): void {
+    this.phase = "title";
+  }
+
   /** タイトルから新規開始 */
   start(): void {
     this.grid = createGrid();
