@@ -637,7 +637,7 @@ export class Renderer {
     const { ls: levelLs, lw: levelLw } = calcScale(this.levelLabelSprite);
     const { ls: nextLs, lw: nextLw } = calcScale(this.nextLabelSprite);
     const row1y = top + lh / 2;
-    const row2y = top + lh + 4 + lh / 2;
+    const row2y = top + lh + 42;
 
     // 左：[SCORE] 12345 / [BEST] 9999 （横並び）
     this.scoreLabelText.position.set(14, top);
