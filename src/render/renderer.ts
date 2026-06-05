@@ -468,7 +468,7 @@ export class Renderer {
   private layoutGameoverBtns(): void {
     if (!this.gameoverBtnsLoaded) return;
     const { vw, vh } = this.layout;
-    const btnW = vw * 0.48;
+    const btnW = this.titleBtnBase.w > 0 ? this.titleBtnBase.w : vw * 0.62;
     const cx = vw / 2;
     let y = vh * 0.46;
     for (let i = 0; i < 3; i++) {
@@ -637,14 +637,16 @@ export class Renderer {
     const { ls: levelLs, lw: levelLw } = calcScale(this.levelLabelSprite);
     const { ls: nextLs, lw: nextLw } = calcScale(this.nextLabelSprite);
     const row1y = top + lh / 2;
-    const row2y = top + lh + 42;
+    // 左：SCORE / 値 / BEST / 値 の縦積みレイアウト
+    const scoreValY = top + lh + 2 + 11;        // SCOREラベル下＋数値半分
+    const bestLblY  = scoreValY + 11 + 4 + 13;  // SCORE値下＋BESTラベル中心
+    const bestValY  = bestLblY  + 13 + 2 + 11;  // BESTラベル下＋数値半分
 
-    // 左：[SCORE] 12345 / [BEST] 9999 （横並び）
     this.scoreLabelText.position.set(14, top);
     this.scoreText.anchor.set(0, 0.5);
-    this.scoreText.position.set(14 + scoreLw + 6, row1y);
+    this.scoreText.position.set(14, scoreValY);
     this.bestText.anchor.set(0, 0.5);
-    this.bestText.position.set(14 + bestLw + 6, row2y);
+    this.bestText.position.set(14, bestValY);
 
     // 中央：[LEVEL] 3 横並び / メーター（少し右寄り）
     const cx = vw / 2;
@@ -664,7 +666,7 @@ export class Renderer {
     this.scoreLabelSprite.scale.set(scoreLs);
     this.scoreLabelSprite.position.set(14 + scoreLw / 2, row1y);
     this.bestLabelSprite.scale.set(bestLs);
-    this.bestLabelSprite.position.set(14 + bestLw / 2, row2y);
+    this.bestLabelSprite.position.set(14 + bestLw / 2, bestLblY);
     this.levelLabelSprite.scale.set(levelLs);
     this.levelLabelSprite.position.set(cx, row1y);
     this.nextLabelSprite.scale.set(nextLs);
