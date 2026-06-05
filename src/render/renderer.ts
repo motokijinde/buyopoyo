@@ -58,6 +58,8 @@ export class Renderer {
   private titleBtnBase = { x: 0, y: 0, w: 0, h: 0, scale: 1 };
   private btnPressT = -1;
   private btnPressCallback: (() => void) | null = null;
+  private dangerOverlayGfx = new Graphics();
+  private dangerPulse = 0;
   private gameoverBtnSprites = [new Sprite(), new Sprite(), new Sprite()];
   private gameoverBtnTexts: Text[] = [];
   private gameoverBtnBases = [0, 1, 2].map(() => ({ x: 0, y: 0, w: 0, h: 0, scale: 1 }));
@@ -68,7 +70,6 @@ export class Renderer {
   private introStart = 0;
   private world = new Container();
   private frameGfx = new Graphics();
-  private dangerGfx = new Graphics();
   private bridgeGfx = new Graphics();
   private puyoLayer = new Container();
   private particleLayer = new Container();
@@ -218,9 +219,9 @@ export class Renderer {
 
     this.app.stage.addChild(this.bgSprite);
     this.app.stage.addChild(this.world);
+    this.app.stage.addChild(this.dangerOverlayGfx);
     this.world.addChild(this.gameBgSprite); // 盤面の最背面（フレーム画像）
     this.world.addChild(this.frameGfx);
-    this.world.addChild(this.dangerGfx);
     this.world.addChild(this.bridgeGfx);
     this.world.addChild(this.puyoLayer);
     this.world.addChild(this.particleLayer);
@@ -258,7 +259,7 @@ export class Renderer {
     this.titleBtnSprite.anchor.set(0.5);
     this.titleBtnText = new Text({ text: "START", style: { fill: "#ffffff", fontSize: 24, fontFamily: font, fontWeight: "bold", stroke: { color: "#996600", width: 5 } } });
     this.titleBtnText.anchor.set(0.5);
-    const goLabels = ["REPLAY", "SCORE", "MENU"];
+    const goLabels = ["REPLAY", "RANKING", "EXIT"];
     const goStrokes = ["#1a5500", "#441188", "#881100"];
     for (let i = 0; i < 3; i++) {
       const t = new Text({ text: goLabels[i], style: { fill: "#ffffff", fontSize: 24, fontFamily: font, fontWeight: "bold", stroke: { color: goStrokes[i], width: 5 } } });
@@ -480,7 +481,7 @@ export class Renderer {
       this.gameoverBtnSprites[i].position.set(cx, y);
       this.gameoverBtnTexts[i].style.fontSize = Math.round(Math.min(btnH * 0.42, btnW * 0.18));
       this.gameoverBtnTexts[i].position.set(cx, y - btnH * 0.10);
-      y += btnH / 2 + 32;
+      y += btnH / 2 + 44;
     }
   }
 
@@ -887,8 +888,8 @@ export class Renderer {
     // 全消し演出
     this.updateAllClear(dtMs);
 
-    // 危険時の枠フラッシュ
-    this.updateDangerFrame(game);
+    // 危険時の画面フラッシュ
+    this.updateDangerOverlay(game, dtMs);
 
     // オーバーレイ（タイトル/ゲームオーバー）
     this.updateOverlay(game, dtMs);
@@ -1049,22 +1050,22 @@ export class Renderer {
     this.allClearText.scale.set(1 + 0.25 * (1 - fadeOut));
   }
 
-  private dangerPulse = 0;
-  private updateDangerFrame(game: Game): void {
-    this.dangerGfx.clear(); // 毎フレームclearして溜め込まない
-    const danger = game.phase !== "title" && this.isDanger(game);
-    if (!danger) return;
-    this.dangerPulse += 0.1;
-    const { cell, boardX, boardTop } = this.layout;
-    const w = cell * COLS, h = cell * VISIBLE_ROWS;
-    const a = 0.3 + 0.2 * Math.sin(this.dangerPulse);
-    this.dangerGfx.roundRect(boardX - 4, boardTop - 4, w + 8, h + 8, 12).stroke({ width: 3, color: "#ff5050", alpha: a });
+  private updateDangerOverlay(game: Game, dtMs: number): void {
+    const g = this.dangerOverlayGfx;
+    g.clear();
+    if (game.phase !== "control" && game.phase !== "resolving") { this.dangerPulse = 0; return; }
+    if (!this.isDanger(game)) { this.dangerPulse = 0; return; }
+    this.dangerPulse += dtMs * 0.006;
+    const { vw, vh } = this.layout;
+    const a = 0.08 + 0.07 * Math.sin(this.dangerPulse);
+    g.rect(0, 0, vw, vh).fill({ color: 0xffffff, alpha: a });
   }
 
   private isDanger(game: Game): boolean {
-    // 出現列の上の方（見える最上段から数段）が埋まっていたら危険
-    for (let r = HIDDEN_ROWS; r <= HIDDEN_ROWS + 3; r++) {
-      if (game.grid[r]?.[SPAWN_COL] != null) return true;
+    for (let c = 0; c < COLS; c++) {
+      for (let r = HIDDEN_ROWS; r <= HIDDEN_ROWS + 2; r++) {
+        if (game.grid[r]?.[c] != null) return true;
+      }
     }
     return false;
   }
