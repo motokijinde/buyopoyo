@@ -46,7 +46,11 @@ export class GestureInput {
 
   private onDown = (e: PointerEvent): void => {
     e.preventDefault();
-    if (this.game.phase === "title" || this.game.phase === "gameover") {
+    if (this.game.phase === "title") {
+      this.renderer.tryPressTitleBtn(e.clientX, e.clientY, this.onStartOrRetry);
+      return;
+    }
+    if (this.game.phase === "gameover") {
       this.onStartOrRetry();
       return;
     }

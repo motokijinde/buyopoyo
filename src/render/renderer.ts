@@ -1,7 +1,7 @@
 // PixiJSレンダラ：ゲーム状態を毎フレーム描画する（ロジックには非依存）
 //   - ぶよはテクスチャ済みスプライト（プール再利用）、連結ブリッジはGraphics
 //   - 落下/消去/連鎖アニメ、画面シェイク、連鎖ポップ、飛沫パーティクル
-import { Application, Assets, Container, Graphics, Sprite, Text, Texture } from "pixi.js";
+import { Application, Assets, Container, FillGradient, Graphics, Sprite, Text, Texture } from "pixi.js";
 import type { Game } from "../core/game.ts";
 import { childPos } from "../core/board.ts";
 import { COLS, HIDDEN_ROWS, ROWS, SPAWN_COL, VISIBLE_ROWS, type ColorId, type Piece } from "../core/types.ts";
@@ -49,9 +49,15 @@ export class Renderer {
   private titleLogoSprite = new Sprite();
   private titleChars: Sprite[] = [];
   private titleLoaded = false;
+  private gameoverSprite = new Sprite();
+  private gameoverLoaded = false;
   private titleLogoBase = { x: 0, y: 0, scale: 1 };
   private titleCharBase: Array<{ x: number; y: number; size: number }> = [];
-  private titleBgRect = { x: 0, y: 0, w: 0, h: 0 };
+  private titleBtnSprite = new Sprite();
+  private titleBtnText!: Text;
+  private titleBtnBase = { x: 0, y: 0, w: 0, h: 0, scale: 1 };
+  private btnPressT = -1;
+  private btnPressCallback: (() => void) | null = null;
   private introActive = false; // スタート演出（ジングル再生）中
   private introStart = 0;
   private world = new Container();
@@ -63,8 +69,18 @@ export class Renderer {
   private hud = new Container();
 
   private scoreText!: Text;
+  private scoreLabelText!: Text;
   private bestText!: Text;
   private levelText!: Text;
+  private levelLabelText!: Text;
+  private levelMeterGfx = new Graphics();
+  private levelMeterProg = 0;
+  private levelGemGradient!: FillGradient;
+  private scoreLabelSprite = new Sprite();
+  private bestLabelSprite = new Sprite();
+  private levelLabelSprite = new Sprite();
+  private nextLabelSprite = new Sprite();
+  private labelImgLoaded = false;
   private nextLabel!: Text;
   private nextSprites: [Sprite, Sprite];
   private chainText!: Text;
@@ -107,7 +123,7 @@ export class Renderer {
     const app = new Application();
     await app.init({
       resizeTo: window,
-      background: "#150b2c",
+      background: "#000000",
       antialias: true,
       resolution: Math.min(window.devicePixelRatio || 1, 2.5),
       autoDensity: true,
@@ -124,12 +140,14 @@ export class Renderer {
   private async loadImages(): Promise<void> {
     const base = import.meta.env.BASE_URL;
     try {
-      const [bg, logo] = await Promise.all([
+      const [bg, logo, btn] = await Promise.all([
         Assets.load(`${base}back.png`),
         Assets.load(`${base}moji.png`),
+        Assets.load(`${base}button-yellow.png`),
       ]);
       this.titleBgSprite.texture = bg;
       this.titleLogoSprite.texture = logo;
+      this.titleBtnSprite.texture = btn;
       this.titleLoaded = true;
     } catch {
       this.titleLoaded = false;
@@ -140,11 +158,44 @@ export class Renderer {
     } catch {
       this.gameBgLoaded = false;
     }
+    try {
+      this.gameoverSprite.texture = await Assets.load(`${base}gameover.png`);
+      this.gameoverLoaded = true;
+    } catch {
+      this.gameoverLoaded = false;
+    }
+    try {
+      const [st, bt, lt, nt] = await Promise.all([
+        Assets.load(`${base}score.png`),
+        Assets.load(`${base}best.png`),
+        Assets.load(`${base}level.png`),
+        Assets.load(`${base}next.png`),
+      ]);
+      this.scoreLabelSprite.texture = st;
+      this.bestLabelSprite.texture = bt;
+      this.levelLabelSprite.texture = lt;
+      this.nextLabelSprite.texture = nt;
+      this.labelImgLoaded = true;
+    } catch {
+      this.labelImgLoaded = false;
+    }
   }
 
   private build(): void {
     this.textures = generatePuyoTextures();
     this.particleTex = generateParticleTexture();
+    this.levelGemGradient = new FillGradient({
+      type: "linear",
+      start: { x: 0, y: 0 },
+      end: { x: 0, y: 1 },
+      colorStops: [
+        { offset: 0, color: "#fff5c0" },
+        { offset: 0.3, color: "#ffd740" },
+        { offset: 0.72, color: "#ff9900" },
+        { offset: 1, color: "#cc5500" },
+      ],
+      textureSpace: "local",
+    });
 
     this.app.stage.addChild(this.bgSprite);
     this.app.stage.addChild(this.world);
@@ -156,14 +207,15 @@ export class Renderer {
     this.world.addChild(this.particleLayer);
 
     const font = "-apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif";
-    this.scoreText = new Text({ text: "0", style: { fill: "#ffffff", fontSize: 26, fontFamily: font, fontWeight: "bold" } });
-    const small = { fill: "#ffffffb0", fontSize: 11, fontFamily: font, fontWeight: "bold" as const };
-    this.bestText = new Text({ text: "BEST 0", style: small });
-    this.levelText = new Text({ text: "LEVEL 1", style: small });
-    this.nextLabel = new Text({ text: "NEXT", style: small });
-    this.bestText.anchor.set(1, 0);
-    this.levelText.anchor.set(1, 0);
-    this.nextLabel.anchor.set(1, 0);
+    this.scoreLabelText = new Text({ text: "SCORE", style: { fill: "#ffce3a", fontSize: 11, fontFamily: font, fontWeight: "bold" } });
+    this.scoreText = new Text({ text: "0", style: { fill: "#ffffff", fontSize: 22, fontFamily: font, fontWeight: "bold", stroke: { color: "#cc44aa", width: 4 } } });
+    this.bestText = new Text({ text: "BEST 0", style: { fill: "#ffffff", fontSize: 22, fontFamily: font, fontWeight: "bold", stroke: { color: "#cc44aa", width: 4 } } });
+    this.levelLabelText = new Text({ text: "LEVEL", style: { fill: "#ffe07a", fontSize: 10, fontFamily: font, fontWeight: "bold" } });
+    this.levelText = new Text({ text: "1", style: { fill: "#ffe07a", fontSize: 20, fontFamily: font, fontWeight: "bold", stroke: { color: "#7a3ba8", width: 4 } } });
+    this.nextLabel = new Text({ text: "NEXT", style: { fill: "#ffe07a", fontSize: 12, fontFamily: font, fontWeight: "bold" } });
+    this.levelLabelText.anchor.set(0.5, 0);
+    this.levelText.anchor.set(0.5, 0);
+    this.nextLabel.anchor.set(0.5, 0);
     for (const s of this.nextSprites) s.anchor.set(0.5);
 
     this.chainText = new Text({
@@ -184,8 +236,18 @@ export class Renderer {
     this.overlayText.anchor.set(0.5);
     this.subText = new Text({ text: "", style: { fill: "#ffce3a", fontSize: 18, fontFamily: font, fontWeight: "bold", align: "center", stroke: { color: "#7a3ba8", width: 4 } } });
     this.subText.anchor.set(0.5);
+    this.titleBtnSprite.anchor.set(0.5);
+    this.titleBtnText = new Text({ text: "START", style: { fill: "#ffffff", fontSize: 24, fontFamily: font, fontWeight: "bold", stroke: { color: "#996600", width: 5 } } });
+    this.titleBtnText.anchor.set(0.5);
 
-    this.hud.addChild(this.scoreText, this.bestText, this.levelText, this.nextLabel);
+    this.hud.addChild(this.scoreLabelText, this.scoreText, this.bestText);
+    this.hud.addChild(this.levelLabelText, this.levelText);
+    this.hud.addChild(this.nextLabel);
+    for (const s of [this.scoreLabelSprite, this.bestLabelSprite, this.levelLabelSprite, this.nextLabelSprite]) {
+      s.anchor.set(0.5, 0.43);
+      this.hud.addChild(s);
+    }
+    this.hud.addChild(this.levelMeterGfx);
     this.hud.addChild(this.nextSprites[0], this.nextSprites[1]);
     this.hud.addChild(this.chainText, this.allClearText, this.overlayText, this.subText);
 
@@ -200,8 +262,13 @@ export class Renderer {
       this.titleLayer.addChild(s);
     }
     this.titleLayer.addChild(this.titleLogoSprite);
+    this.titleLayer.addChild(this.titleBtnSprite, this.titleBtnText);
     this.titleLayer.visible = false;
     this.app.stage.addChild(this.titleLayer);
+    // ゲームオーバー画像（タイトルより前面、HUDより背面）
+    this.gameoverSprite.anchor.set(0.5);
+    this.gameoverSprite.alpha = 0;
+    this.app.stage.addChild(this.gameoverSprite);
     // HUD/オーバーレイ文字（タップでスタート等）はタイトル画像より前面に
     this.app.stage.addChild(this.hud);
   }
@@ -220,7 +287,7 @@ export class Renderer {
     const vh = window.innerHeight;
     const safeTop = this.env("top");
     const safeBottom = this.env("bottom");
-    const hudH = 86 + safeTop;
+    const hudH = 180 + safeTop;
     const footH = 24 + safeBottom;
     const availH = vh - hudH - footH;
     const availW = vw - 16;
@@ -264,8 +331,8 @@ export class Renderer {
     if (!this.titleLoaded) return;
     const { vw, vh } = this.layout;
     const tex = this.titleBgSprite.texture;
-    // cover：画面全体を埋める（はみ出しは切る）＋中央寄せ。画像が画面とほぼ同比率なのでクロップは数px
-    const s = Math.max(vw / tex.width, vh / tex.height);
+    // contain + 元サイズ上限：画面に収まる最大スケール（1倍超えない）でPCは左右レターボックス
+    const s = Math.min(vw / tex.width, vh / tex.height, 1);
     const bw = tex.width * s;
     const bh = tex.height * s;
     const bx = (vw - bw) / 2;
@@ -273,7 +340,6 @@ export class Renderer {
     // 背景
     this.titleBgSprite.scale.set(s);
     this.titleBgSprite.position.set(vw / 2, vh / 2);
-    this.titleBgRect = { x: bx, y: by, w: bw, h: bh };
     // ロゴ（横幅を背景の82%に・上寄り）
     const logoTex = this.titleLogoSprite.texture;
     this.titleLogoBase = { x: bx + bw * 0.5, y: by + bh * 0.3, scale: (bw * 0.82) / logoTex.width };
@@ -288,10 +354,22 @@ export class Renderer {
         size,
       });
     }
+    // ボタン（背景幅の62%、下部に配置）
+    const btnTex = this.titleBtnSprite.texture;
+    const btnW = bw * 0.62;
+    const btnScale = btnW / btnTex.width;
+    const btnH = btnTex.height * btnScale;
+    const btnX = bx + bw * 0.5;
+    const btnY = by + bh * 0.76;
+    this.titleBtnBase = { x: btnX, y: btnY, w: btnW, h: btnH, scale: btnScale };
+    this.titleBtnSprite.scale.set(btnScale);
+    this.titleBtnSprite.position.set(btnX, btnY);
+    this.titleBtnText.style.fontSize = Math.round(Math.min(btnH * 0.42, btnW * 0.18));
+    this.titleBtnText.position.set(btnX, btnY);
   }
 
   /** タイトルのアニメ：通常=ぷるぷる揺れ＋まばたき／スタート演出中=にっこりピョコ＆ロゴ拡大 */
-  private updateTitle(): void {
+  private updateTitle(dtMs: number): void {
     if (!this.titleLoaded) return;
     const t = this.timeMs;
     const intro = this.introActive ? Math.min(1, (t - this.introStart) / 320) : 0; // 立ち上がり0→1
@@ -324,6 +402,81 @@ export class Renderer {
       this.titleLogoSprite.scale.set(lb.scale * (1 - 0.03 * e), lb.scale * (1 + 0.03 * e));
       this.titleLogoSprite.position.set(lb.x, lb.y + Math.sin(t / 600) * this.layout.vh * 0.004);
     }
+
+    // ボタンアニメーション
+    const b = this.titleBtnBase;
+    let btnScale = b.scale;
+    if (this.btnPressT >= 0) {
+      this.btnPressT += dtMs;
+      const PRESS = 80, BOUNCE = 100, SETTLE = 60, TOTAL = PRESS + BOUNCE + SETTLE;
+      let sc: number;
+      if (this.btnPressT < PRESS) {
+        sc = 1 - 0.12 * (this.btnPressT / PRESS);
+      } else if (this.btnPressT < PRESS + BOUNCE) {
+        sc = 0.88 + 0.2 * ((this.btnPressT - PRESS) / BOUNCE);
+      } else if (this.btnPressT < TOTAL) {
+        sc = 1.08 - 0.08 * ((this.btnPressT - PRESS - BOUNCE) / SETTLE);
+      } else {
+        sc = 1;
+        const cb = this.btnPressCallback;
+        this.btnPressT = -1;
+        this.btnPressCallback = null;
+        cb?.();
+      }
+      btnScale = b.scale * sc;
+    }
+    this.titleBtnSprite.scale.set(btnScale);
+    this.titleBtnText.scale.set(this.btnPressT >= 0 ? btnScale / b.scale : 1);
+  }
+
+  private drawLevelMeter(game: Game, dtMs: number): void {
+    const MAX_LEVEL = 10;
+    const BLOCKS = 8;
+    const target = Math.min(1, game.level / MAX_LEVEL);
+    this.levelMeterProg += (target - this.levelMeterProg) * Math.min(1, dtMs / 250);
+
+    const g = this.levelMeterGfx;
+    g.clear();
+    const { vw, safeTop } = this.layout;
+    const top = safeTop + 8;
+    const cx = vw / 2;
+    const bw = 14, bh = 14, gap = 3;
+    const lh = 26;
+    const levelTh = this.levelLabelSprite.texture.height || 1024;
+    const levelTw = this.levelLabelSprite.texture.width || 1536;
+    const lw = Math.round(levelTw * (lh / levelTh));
+    const totalW = BLOCKS * bw + (BLOCKS - 1) * gap;
+    const startX = cx - totalW / 2 + 10;
+    const y = top + lh + 10;
+
+    for (let i = 0; i < BLOCKS; i++) {
+      const x = startX + i * (bw + gap);
+      const partial = Math.min(1, Math.max(0, this.levelMeterProg * BLOCKS - i));
+      const r = 4;
+
+      // 凹み（空ブロックのベース）
+      g.roundRect(x, y, bw, bh, r).fill({ color: 0x060212, alpha: 0.88 });
+
+      if (partial > 0) {
+        // 外側発光
+        g.roundRect(x - 2, y - 2, bw + 4, bh + 4, r + 2).fill({ color: 0xffaa00, alpha: 0.22 * partial });
+        // 宝石グラデーション本体
+        g.roundRect(x, y, bw, bh, r).fill(this.levelGemGradient);
+        // 部分塗り：右側を暗くオーバーレイして埋まってない部分を表現
+        if (partial < 1) {
+          const px = Math.ceil(bw * partial);
+          g.rect(x + px, y, bw - px, bh).fill({ color: 0x060212, alpha: 1 });
+        }
+        // 上部ハイライト（白い光沢）
+        const hlW = Math.floor(bw * partial) - 4;
+        if (hlW > 1) {
+          g.roundRect(x + 2, y + 2, hlW, Math.floor(bh * 0.32), 1).fill({ color: 0xffffff, alpha: 0.55 });
+        }
+      }
+
+      // 枠線
+      g.roundRect(x, y, bw, bh, r).stroke({ width: 1, color: 0xffffff, alpha: 0.22 });
+    }
   }
 
   private drawBackground(): void {
@@ -332,10 +485,7 @@ export class Renderer {
     canvas.width = Math.max(2, Math.floor(vw));
     canvas.height = Math.max(2, Math.floor(vh));
     const ctx = canvas.getContext("2d")!;
-    const g = ctx.createLinearGradient(0, 0, 0, vh);
-    g.addColorStop(0, "#2a1858");
-    g.addColorStop(1, "#120726");
-    ctx.fillStyle = g;
+    ctx.fillStyle = "#000000";
     ctx.fillRect(0, 0, vw, vh);
     this.bgSprite.texture = Texture.from(canvas);
     this.bgSprite.width = vw;
@@ -377,18 +527,52 @@ export class Renderer {
   private layoutHud(): void {
     const { vw, safeTop } = this.layout;
     const top = safeTop + 8;
-    this.scoreText.position.set(16, top + 14);
-    this.bestText.position.set(vw - 16, top);
-    this.levelText.position.set(vw - 16, top + 16);
-    this.nextLabel.position.set(vw - 16, top + 36);
-    const nx = vw - 30;
-    const ny = top + 56;
-    this.nextSprites[0].position.set(nx, ny);
-    this.nextSprites[1].position.set(nx, ny + 26);
-    for (const s of this.nextSprites) {
-      const k = 22 / TEX_SIZE;
-      s.scale.set(k);
-    }
+    // ラベル画像の表示高さ（各画像のサイズから個別にスケールを計算）
+    const lh = 26;
+    const calcScale = (sprite: Sprite) => {
+      const th = sprite.texture.height || 1024;
+      const tw = sprite.texture.width || 1536;
+      const s = Math.min(lh / th, 1); // 元サイズより拡大しない
+      return { ls: s, lw: Math.round(tw * s) };
+    };
+    const { ls: scoreLs, lw: scoreLw } = calcScale(this.scoreLabelSprite);
+    const { ls: bestLs, lw: bestLw } = calcScale(this.bestLabelSprite);
+    const { ls: levelLs, lw: levelLw } = calcScale(this.levelLabelSprite);
+    const { ls: nextLs, lw: nextLw } = calcScale(this.nextLabelSprite);
+    const row1y = top + lh / 2;
+    const row2y = top + lh + 4 + lh / 2;
+
+    // 左：[SCORE] 12345 / [BEST] 9999 （横並び）
+    this.scoreLabelText.position.set(14, top);
+    this.scoreText.anchor.set(0, 0.5);
+    this.scoreText.position.set(14 + scoreLw + 6, row1y);
+    this.bestText.anchor.set(0, 0.5);
+    this.bestText.position.set(14 + bestLw + 6, row2y);
+
+    // 中央：[LEVEL] 3 横並び / メーター（少し右寄り）
+    const cx = vw / 2;
+    this.levelLabelText.position.set(cx, top);
+    this.levelText.anchor.set(0, 0.5);
+    this.levelText.position.set(cx + levelLw / 2 + 6, row1y);
+
+    // 右：[NEXT] / ぶよ × 2
+    const nextSize = 36;
+    const nx = vw - nextLw / 2 - 14;
+    this.nextLabel.position.set(nx, top);
+    this.nextSprites[0].position.set(nx, top + lh + 8 + nextSize / 2);
+    this.nextSprites[1].position.set(nx, top + lh + 8 + nextSize + 2 + nextSize / 2);
+    for (const s of this.nextSprites) s.scale.set(nextSize / TEX_SIZE);
+
+    // ラベル画像配置（anchor=0.5 で中心基準）
+    this.scoreLabelSprite.scale.set(scoreLs);
+    this.scoreLabelSprite.position.set(14 + scoreLw / 2, row1y);
+    this.bestLabelSprite.scale.set(bestLs);
+    this.bestLabelSprite.position.set(14 + bestLw / 2, row2y);
+    this.levelLabelSprite.scale.set(levelLs);
+    this.levelLabelSprite.position.set(cx, row1y);
+    this.nextLabelSprite.scale.set(nextLs);
+    this.nextLabelSprite.position.set(nx, row1y);
+
     this.chainText.position.set(vw / 2, this.layout.boardTop + this.layout.cell * VISIBLE_ROWS * 0.38);
     this.allClearText.position.set(vw / 2, this.layout.boardTop + this.layout.cell * VISIBLE_ROWS * 0.22);
     this.overlayText.position.set(vw / 2, this.layout.vh * 0.42);
@@ -450,20 +634,29 @@ export class Renderer {
 
     // HUD更新
     this.scoreText.text = String(game.score);
-    this.bestText.text = `BEST ${getBest()}`;
-    this.levelText.text = `LEVEL ${game.level}`;
+    this.bestText.text = this.labelImgLoaded ? String(getBest()) : `BEST ${getBest()}`;
+    this.levelText.text = String(game.level);
     this.nextSprites[0].texture = this.tex(game.next[1], "normal");
     this.nextSprites[1].texture = this.tex(game.next[0], "normal");
     const showHud = game.phase !== "title";
+    const useImg = this.labelImgLoaded;
     // タイトル中は盤面を隠してタイトル画像だけ見せる
     this.world.visible = showHud;
     this.hud.visible = true;
+    this.scoreLabelText.visible = showHud && !useImg;
     this.scoreText.visible = showHud;
     this.bestText.visible = showHud;
+    this.levelLabelText.visible = showHud && !useImg;
     this.levelText.visible = showHud;
-    this.nextLabel.visible = showHud;
+    this.levelMeterGfx.visible = showHud;
+    this.nextLabel.visible = showHud && !useImg;
     this.nextSprites[0].visible = showHud;
     this.nextSprites[1].visible = showHud;
+    this.scoreLabelSprite.visible = showHud && useImg;
+    this.bestLabelSprite.visible = showHud && useImg;
+    this.levelLabelSprite.visible = showHud && useImg;
+    this.nextLabelSprite.visible = showHud && useImg;
+    if (showHud) this.drawLevelMeter(game, dtMs);
 
     // 盤面ぶよの描画
     let idx = 0;
@@ -596,7 +789,7 @@ export class Renderer {
     this.updateDangerFrame(game);
 
     // オーバーレイ（タイトル/ゲームオーバー）
-    this.updateOverlay(game);
+    this.updateOverlay(game, dtMs);
   }
 
   private drawBridges(
@@ -774,39 +967,85 @@ export class Renderer {
     return false;
   }
 
-  private updateOverlay(game: Game): void {
+  private updateGameoverAnim(vw: number, vh: number): void {
+    const sprite = this.gameoverSprite;
+    const tex = sprite.texture;
+    const FALL_MS = 480;
+    const t = this.gameOverT;
+    const targetY = vh * 0.40;
+    const s = Math.min(vw * 0.85 / tex.width, vh * 0.42 / tex.height);
+    sprite.scale.set(s);
+    sprite.x = vw / 2;
+
+    if (t < FALL_MS) {
+      const p = t / FALL_MS;
+      const startY = -(tex.height * s) / 2;
+      sprite.y = startY + (targetY - startY) * (p * p); // ease-in 落下
+      sprite.alpha = Math.min(1, p * 4); // 素早くフェードイン
+    } else {
+      // 減衰バウンド（指数減衰 × コサイン）
+      const bt = (t - FALL_MS) / 400;
+      const bounce = Math.exp(-bt * 3.5) * Math.cos(bt * Math.PI * 3.5) * (tex.height * s) * 0.12;
+      // バウンド収束後はゆらゆら浮遊
+      const float = bt > 1.8 ? Math.sin(this.timeMs / 900) * 3 : 0;
+      sprite.y = targetY + bounce + float;
+      sprite.alpha = 1;
+    }
+  }
+
+  tryPressTitleBtn(clientX: number, clientY: number, callback: () => void): boolean {
+    if (!this.titleLoaded || this.btnPressT >= 0 || this.introActive) return false;
+    const b = this.titleBtnBase;
+    const hw = b.w / 2, hh = b.h / 2;
+    if (clientX >= b.x - hw && clientX <= b.x + hw && clientY >= b.y - hh && clientY <= b.y + hh) {
+      this.btnPressT = 0;
+      this.btnPressCallback = callback;
+      return true;
+    }
+    return false;
+  }
+
+  private updateOverlay(game: Game, dtMs: number): void {
     if (game.phase !== "title") this.introActive = false; // 遷移したら演出終了
     this.titleLayer.visible = game.phase === "title" && this.titleLoaded;
+    // ゲームオーバー以外のフェーズではスプライトを隠す
+    if (game.phase !== "gameover") this.gameoverSprite.alpha = 0;
     const { vw, vh } = this.layout;
     if (game.phase === "title") {
-      if (this.titleLoaded) this.updateTitle();
+      if (this.titleLoaded) this.updateTitle(dtMs);
       // 大ロゴ文字は画像がある時は不要（moji.pngが担う）。フォールバック時のみ表示
       this.overlayText.visible = !this.titleLoaded;
       if (!this.titleLoaded) {
         this.overlayText.text = "ぶよぽよ";
         this.overlayText.style.fontSize = 56;
       }
-      // 「タップでスタート」点滅は画像に重ねて表示（スタート演出中は消す）
-      this.subText.visible = !this.introActive;
-      this.subText.text = "タップでスタート";
-      this.subText.alpha = 0.5 + 0.5 * Math.sin(this.timeMs / 400);
-      if (this.titleLoaded) {
-        const r = this.titleBgRect;
-        this.subText.style.fontSize = Math.round(r.w * 0.072); // 大きめ＆画面サイズ追従
-        this.subText.position.set(r.x + r.w / 2, r.y + r.h * 0.52); // 虹のあたり
-      } else {
+      // ボタン画像があるときはsubTextを非表示
+      this.subText.visible = !this.titleLoaded && !this.introActive;
+      if (!this.titleLoaded) {
+        this.subText.text = "タップでスタート";
+        this.subText.alpha = 0.5 + 0.5 * Math.sin(this.timeMs / 400);
         this.subText.style.fontSize = 22;
         this.subText.position.set(vw / 2, vh * 0.55);
       }
+      this.titleBtnSprite.visible = this.titleLoaded && !this.introActive;
+      this.titleBtnText.visible = this.titleLoaded && !this.introActive;
     } else if (game.phase === "gameover") {
+      if (this.gameoverLoaded) this.updateGameoverAnim(vw, vh);
       this.overlayText.visible = true;
       this.subText.visible = true;
-      this.overlayText.text = `ゲームオーバー\nSCORE ${game.score}`;
-      this.overlayText.style.fontSize = 38;
+      if (this.gameoverLoaded) {
+        this.overlayText.text = `SCORE  ${game.score}`;
+        this.overlayText.style.fontSize = 32;
+        this.overlayText.position.set(vw / 2, vh * 0.60);
+      } else {
+        this.overlayText.text = `ゲームオーバー\nSCORE ${game.score}`;
+        this.overlayText.style.fontSize = 38;
+        this.overlayText.position.set(vw / 2, vh * 0.42);
+      }
       this.subText.style.fontSize = 18;
       this.subText.text = "タップでもう一回";
       this.subText.alpha = 0.5 + 0.5 * Math.sin(this.timeMs / 400);
-      this.subText.position.set(vw / 2, vh * 0.55);
+      this.subText.position.set(vw / 2, vh * 0.68);
     } else {
       this.overlayText.visible = false;
       this.subText.visible = false;
