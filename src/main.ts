@@ -50,7 +50,7 @@ async function main(): Promise<void> {
         .then((res) => {
           renderer.hideLoading();
           const top = res.rankings;
-          const isTop10 = top.length < 10 || score > top[top.length - 1].score;
+          const isTop10 = score > 0 && (top.length < 10 || score > top[top.length - 1].score);
 
           if (!isTop10) {
             showRanking(top, -1);
