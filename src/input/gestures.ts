@@ -35,6 +35,7 @@ export class GestureInput {
     private renderer: Renderer,
     private onStartOrRetry: () => void,
     private onGoTitle: () => void,
+    private onRanking: () => void,
     private tune: GestureTune = DEFAULT_GESTURE_TUNE,
   ) {
     canvas.addEventListener("pointerdown", this.onDown, { passive: false });
@@ -47,12 +48,16 @@ export class GestureInput {
 
   private onDown = (e: PointerEvent): void => {
     e.preventDefault();
+    // オーバーレイはフェーズに関わらず最優先で判定
+    if (this.renderer.tryPressLoadingBtn(e.clientX, e.clientY)) return;
+    if (this.renderer.tryPressRankingClose(e.clientX, e.clientY)) return;
     if (this.game.phase === "title") {
+      if (this.renderer.tryPressTitleRankingBtn(e.clientX, e.clientY, this.onRanking)) return;
       this.renderer.tryPressTitleBtn(e.clientX, e.clientY, this.onStartOrRetry);
       return;
     }
     if (this.game.phase === "gameover") {
-      this.renderer.tryPressGameoverBtn(e.clientX, e.clientY, this.onStartOrRetry, this.onGoTitle);
+      this.renderer.tryPressGameoverBtn(e.clientX, e.clientY, this.onStartOrRetry, this.onRanking, this.onGoTitle);
       return;
     }
     this.touch = {

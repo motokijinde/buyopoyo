@@ -11,6 +11,8 @@ import {
   generateParticleTexture,
   generatePuyoTextures,
 } from "./puyoGraphics.ts";
+import { LoadingOverlay } from "./loadingOverlay.ts";
+import { RankingOverlay, type RankEntry } from "./rankingOverlay.ts";
 
 const TEX_SIZE = 128;
 const LAND_MS = 240; // 着地スクワッシュの長さ
@@ -58,6 +60,11 @@ export class Renderer {
   private titleBtnBase = { x: 0, y: 0, w: 0, h: 0, scale: 1 };
   private btnPressT = -1;
   private btnPressCallback: (() => void) | null = null;
+  private titleRankingBtnSprite = new Sprite();
+  private titleRankingBtnText!: Text;
+  private titleRankingBtnBase = { x: 0, y: 0, w: 0, h: 0, scale: 1 };
+  private rankingBtnPressT = -1;
+  private rankingBtnPressCallback: (() => void) | null = null;
   private dangerOverlayGfx = new Graphics();
   private dangerPulse = 0;
   private gameoverBtnSprites = [new Sprite(), new Sprite(), new Sprite()];
@@ -121,6 +128,9 @@ export class Renderer {
   private prevPhase = "title";
   private gameOverT = 0;
 
+  private loadingOverlay!: LoadingOverlay;
+  private rankingOverlay!: RankingOverlay;
+
   private constructor(app: Application) {
     this.app = app;
     this.nextSprites = [new Sprite(), new Sprite()];
@@ -172,14 +182,17 @@ export class Renderer {
       this.gameoverLoaded = false;
     }
     try {
-      const [green, purple, red] = await Promise.all([
+      const [green, purple, red, rankingLogo] = await Promise.all([
         Assets.load(`${base}button-green.png`),
         Assets.load(`${base}button-purple.png`),
         Assets.load(`${base}button-red.png`),
+        Assets.load(`${base}ranking.png`),
       ]);
       this.gameoverBtnSprites[0].texture = green;
       this.gameoverBtnSprites[1].texture = purple;
       this.gameoverBtnSprites[2].texture = red;
+      this.titleRankingBtnSprite.texture = purple;
+      this.rankingOverlay.setTextures(rankingLogo, red);
       this.gameoverBtnsLoaded = true;
     } catch {
       this.gameoverBtnsLoaded = false;
@@ -259,6 +272,9 @@ export class Renderer {
     this.titleBtnSprite.anchor.set(0.5);
     this.titleBtnText = new Text({ text: "START", style: { fill: "#ffffff", fontSize: 24, fontFamily: font, fontWeight: "bold", stroke: { color: "#996600", width: 5 } } });
     this.titleBtnText.anchor.set(0.5);
+    this.titleRankingBtnSprite.anchor.set(0.5);
+    this.titleRankingBtnText = new Text({ text: "RANKING", style: { fill: "#ffffff", fontSize: 20, fontFamily: font, fontWeight: "bold", stroke: { color: "#441188", width: 5 } } });
+    this.titleRankingBtnText.anchor.set(0.5);
     const goLabels = ["REPLAY", "RANKING", "EXIT"];
     const goStrokes = ["#1a5500", "#441188", "#881100"];
     for (let i = 0; i < 3; i++) {
@@ -291,6 +307,7 @@ export class Renderer {
     }
     this.titleLayer.addChild(this.titleLogoSprite);
     this.titleLayer.addChild(this.titleBtnSprite, this.titleBtnText);
+    this.titleLayer.addChild(this.titleRankingBtnSprite, this.titleRankingBtnText);
     this.titleLayer.visible = false;
     this.app.stage.addChild(this.titleLayer);
     // ゲームオーバー画像（タイトルより前面、HUDより背面）
@@ -306,6 +323,12 @@ export class Renderer {
     }
     // HUD/オーバーレイ文字（タップでスタート等）はタイトル画像より前面に
     this.app.stage.addChild(this.hud);
+
+    // ローディング・ランキングオーバーレイ（最前面）
+    this.loadingOverlay = new LoadingOverlay((c, e) => this.tex(c, e));
+    this.app.stage.addChild(this.loadingOverlay);
+    this.rankingOverlay = new RankingOverlay();
+    this.app.stage.addChild(this.rankingOverlay);
   }
 
   private env(side: "top" | "bottom"): number {
@@ -341,6 +364,8 @@ export class Renderer {
     this.layoutHud();
     this.layoutTitle();
     this.layoutGameoverBtns();
+    this.loadingOverlay.layout(vw, vh);
+    this.rankingOverlay.layout(vw, vh);
   }
 
   /** 背景フレーム画像を、内側（プレイ領域）が盤面グリッドにぴったり重なるよう配置（横は非正方マスに合わせ微伸長） */
@@ -390,18 +415,33 @@ export class Renderer {
         size,
       });
     }
-    // ボタン（背景幅の62%、下部に配置）
+    // STARTボタン・RANKINGボタン（同サイズ・縦並び）
     const btnTex = this.titleBtnSprite.texture;
     const btnW = bw * 0.62;
     const btnScale = btnW / btnTex.width;
     const btnH = btnTex.height * btnScale;
     const btnX = bx + bw * 0.5;
-    const btnY = by + bh * 0.76;
+    const btnGap = btnH * 0.18;
+    // 2ボタン分の高さを中心に寄せて、0.70付近に配置
+    const btnBlockH = btnH * 2 + btnGap;
+    const btnY = by + bh * 0.72 - btnBlockH / 2 + btnH / 2;
     this.titleBtnBase = { x: btnX, y: btnY, w: btnW, h: btnH, scale: btnScale };
     this.titleBtnSprite.scale.set(btnScale);
     this.titleBtnSprite.position.set(btnX, btnY);
     this.titleBtnText.style.fontSize = Math.round(Math.min(btnH * 0.42, btnW * 0.18));
     this.titleBtnText.position.set(btnX, btnY - btnH * 0.10);
+
+    // RANKINGボタン（STARTと同サイズ・直下）
+    const rBtnTex = this.titleRankingBtnSprite.texture;
+    const rBtnScale = rBtnTex.width > 1 ? btnW / rBtnTex.width : btnScale;
+    const rBtnH = rBtnTex.height * rBtnScale;
+    const rBtnX = btnX;
+    const rBtnY = btnY + btnH / 2 + btnGap + rBtnH / 2;
+    this.titleRankingBtnBase = { x: rBtnX, y: rBtnY, w: btnW, h: rBtnH, scale: rBtnScale };
+    this.titleRankingBtnSprite.scale.set(rBtnScale);
+    this.titleRankingBtnSprite.position.set(rBtnX, rBtnY);
+    this.titleRankingBtnText.style.fontSize = Math.round(Math.min(rBtnH * 0.42, btnW * 0.18));
+    this.titleRankingBtnText.position.set(rBtnX, rBtnY - rBtnH * 0.10);
   }
 
   /** タイトルのアニメ：通常=ぷるぷる揺れ＋まばたき／スタート演出中=にっこりピョコ＆ロゴ拡大 */
@@ -463,6 +503,28 @@ export class Renderer {
     }
     this.titleBtnSprite.scale.set(btnScale);
     this.titleBtnText.scale.set(this.btnPressT >= 0 ? btnScale / b.scale : 1);
+
+    // RANKINGボタンアニメーション
+    const rb = this.titleRankingBtnBase;
+    let rBtnScale = rb.scale;
+    if (this.rankingBtnPressT >= 0) {
+      this.rankingBtnPressT += dtMs;
+      const PRESS = 80, BOUNCE = 100, SETTLE = 60, TOTAL = PRESS + BOUNCE + SETTLE;
+      let sc: number;
+      if (this.rankingBtnPressT < PRESS) sc = 1 - 0.12 * (this.rankingBtnPressT / PRESS);
+      else if (this.rankingBtnPressT < PRESS + BOUNCE) sc = 0.88 + 0.2 * ((this.rankingBtnPressT - PRESS) / BOUNCE);
+      else if (this.rankingBtnPressT < TOTAL) sc = 1.08 - 0.08 * ((this.rankingBtnPressT - PRESS - BOUNCE) / SETTLE);
+      else {
+        sc = 1;
+        const cb = this.rankingBtnPressCallback;
+        this.rankingBtnPressT = -1;
+        this.rankingBtnPressCallback = null;
+        cb?.();
+      }
+      rBtnScale = rb.scale * sc;
+    }
+    this.titleRankingBtnSprite.scale.set(rBtnScale);
+    this.titleRankingBtnText.scale.set(this.rankingBtnPressT >= 0 ? rBtnScale / rb.scale : 1);
   }
 
   private layoutGameoverBtns(): void {
@@ -470,18 +532,22 @@ export class Renderer {
     const { vw, vh } = this.layout;
     const btnW = this.titleBtnBase.w > 0 ? this.titleBtnBase.w : vw * 0.62;
     const cx = vw / 2;
-    let y = vh * 0.46;
+    // 3ボタン分の高さを計算してブロックごと中央配置（タイトルと同じgap比率）
+    const tex0 = this.gameoverBtnSprites[0].texture;
+    const btnH = tex0.width > 1 ? (tex0.height * (btnW / tex0.width)) : 60;
+    const btnGap = btnH * 0.18;
+    const blockH = btnH * 3 + btnGap * 2;
+    let y = vh * 0.72 - blockH / 2 + btnH / 2;
     for (let i = 0; i < 3; i++) {
       const tex = this.gameoverBtnSprites[i].texture;
       const sc = btnW / tex.width;
-      const btnH = tex.height * sc;
-      y += btnH / 2;
-      this.gameoverBtnBases[i] = { x: cx, y, w: btnW, h: btnH, scale: sc };
+      const h = tex.height * sc;
+      this.gameoverBtnBases[i] = { x: cx, y, w: btnW, h, scale: sc };
       this.gameoverBtnSprites[i].scale.set(sc);
       this.gameoverBtnSprites[i].position.set(cx, y);
-      this.gameoverBtnTexts[i].style.fontSize = Math.round(Math.min(btnH * 0.42, btnW * 0.18));
-      this.gameoverBtnTexts[i].position.set(cx, y - btnH * 0.10);
-      y += btnH / 2 + 44;
+      this.gameoverBtnTexts[i].style.fontSize = Math.round(Math.min(h * 0.42, btnW * 0.18));
+      this.gameoverBtnTexts[i].position.set(cx, y - h * 0.10);
+      y += btnH / 2 + btnGap + btnH / 2;
     }
   }
 
@@ -513,9 +579,9 @@ export class Renderer {
     }
   }
 
-  tryPressGameoverBtn(clientX: number, clientY: number, onReplay: () => void, onMenu: () => void): boolean {
+  tryPressGameoverBtn(clientX: number, clientY: number, onReplay: () => void, onRanking: () => void, onMenu: () => void): boolean {
     if (!this.gameoverBtnsLoaded) return false;
-    const callbacks = [onReplay, (): void => { /* SCORE: 未実装 */ }, onMenu];
+    const callbacks = [onReplay, onRanking, onMenu];
     for (let i = 0; i < 3; i++) {
       if (this.gameoverBtnPressTs[i] >= 0) continue;
       const b = this.gameoverBtnBases[i];
@@ -895,6 +961,10 @@ export class Renderer {
 
     // オーバーレイ（タイトル/ゲームオーバー）
     this.updateOverlay(game, dtMs);
+
+    // ローディング・ランキングオーバーレイ更新
+    this.loadingOverlay.update(dtMs);
+    this.rankingOverlay.update(dtMs);
   }
 
   private drawBridges(
@@ -1098,6 +1168,18 @@ export class Renderer {
     }
   }
 
+  tryPressTitleRankingBtn(clientX: number, clientY: number, callback: () => void): boolean {
+    if (!this.titleLoaded || !this.gameoverBtnsLoaded || this.rankingBtnPressT >= 0 || this.introActive) return false;
+    const b = this.titleRankingBtnBase;
+    const hw = b.w / 2, hh = b.h / 2;
+    if (clientX >= b.x - hw && clientX <= b.x + hw && clientY >= b.y - hh && clientY <= b.y + hh) {
+      this.rankingBtnPressT = 0;
+      this.rankingBtnPressCallback = callback;
+      return true;
+    }
+    return false;
+  }
+
   tryPressTitleBtn(clientX: number, clientY: number, callback: () => void): boolean {
     if (!this.titleLoaded || this.btnPressT >= 0 || this.introActive) return false;
     const b = this.titleBtnBase;
@@ -1140,9 +1222,13 @@ export class Renderer {
       }
       this.titleBtnSprite.visible = this.titleLoaded && !this.introActive;
       this.titleBtnText.visible = this.titleLoaded && !this.introActive;
+      const showRankingBtn = this.titleLoaded && !this.introActive && this.gameoverBtnsLoaded;
+      this.titleRankingBtnSprite.visible = showRankingBtn;
+      this.titleRankingBtnText.visible = showRankingBtn;
     } else if (game.phase === "gameover") {
       if (this.gameoverLoaded) this.updateGameoverAnim(vw, vh);
-      const showBtns = this.gameoverBtnsLoaded;
+      const showBtns = this.gameoverBtnsLoaded &&
+        !this.loadingOverlay.visible && !this.rankingOverlay.visible;
       for (let i = 0; i < 3; i++) {
         this.gameoverBtnSprites[i].visible = showBtns;
         this.gameoverBtnTexts[i].visible = showBtns;
@@ -1194,6 +1280,29 @@ export class Renderer {
   }
   get vh(): number {
     return this.layout.vh;
+  }
+
+  // ---- ローディングオーバーレイ ----
+  showLoading(): void {
+    this.loadingOverlay.show();
+  }
+  showLoadingTimeout(onRetry: () => void, onSkip: () => void): void {
+    this.loadingOverlay.showTimeout(onRetry, onSkip);
+  }
+  hideLoading(): void {
+    this.loadingOverlay.hide();
+  }
+  tryPressLoadingBtn(clientX: number, clientY: number): boolean {
+    return this.loadingOverlay.tryPress(clientX, clientY);
+  }
+
+  // ---- ランキングオーバーレイ ----
+  showRanking(entries: RankEntry[], highlightIdx: number, onClose: () => void): void {
+    this.rankingOverlay.show(entries, highlightIdx, onClose);
+    this.rankingOverlay.layout(this.layout.vw, this.layout.vh);
+  }
+  tryPressRankingClose(clientX: number, clientY: number): boolean {
+    return this.rankingOverlay.tryPressClose(clientX, clientY);
   }
 }
 
