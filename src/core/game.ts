@@ -49,6 +49,7 @@ export const DEFAULT_CONFIG: GameConfig = {
 
 export interface GameEvents {
   onSpawn?: () => void;
+  onRotate?: () => void;
   onLock?: () => void;
   /** 連鎖の各ステップ。chain=連鎖数(1始まり), gained=このステップの得点 */
   onChainStep?: (chain: number, gained: number) => void;
@@ -181,6 +182,7 @@ export class Game {
         p.col += dc;
         p.row += dr;
         p.orientation = nor;
+        this.events.onRotate?.();
         return true;
       }
     }

@@ -13,8 +13,29 @@ async function main(): Promise<void> {
   const game = new Game();
 
   // スタート音（タップ＝ユーザー操作で再生。iOSの自動再生制限に対応）
-  const jingle = new Audio(`${import.meta.env.BASE_URL}nc300657.mp3`);
+  const jingle = new Audio(`${import.meta.env.BASE_URL}start_jingle.wav`);
   jingle.volume = 0.6;
+
+  // ゲーム中 BGM
+  const bgm = new Audio(`${import.meta.env.BASE_URL}candy_loop.mp3`);
+  bgm.loop = true;
+  bgm.volume = 0.45;
+
+  // 着地SE
+  const landSE = new Audio(`${import.meta.env.BASE_URL}puyo_land.wav`);
+  landSE.volume = 0.5;
+
+  // 消去SE
+  const eraseSE = new Audio(`${import.meta.env.BASE_URL}puyo_erase.wav`);
+  eraseSE.volume = 0.5;
+
+  // 回転SE
+  const rotateSE = new Audio(`${import.meta.env.BASE_URL}puyo_rotate.wav`);
+  rotateSE.volume = 0.5;
+
+  // ゲームオーバーSE
+  const gameoverSE = new Audio(`${import.meta.env.BASE_URL}gameover.wav`);
+  gameoverSE.volume = 0.6;
 
   // ハイスコア読み込み
   setBest(Number(localStorage.getItem(BEST_KEY) || 0));
@@ -96,9 +117,17 @@ async function main(): Promise<void> {
   // ゲームイベント → 演出・保存
   game.events.onChainStep = (chain) => {
     renderer.showChain(chain);
+    eraseSE.currentTime = 0;
+    eraseSE.play().catch(() => {});
+  };
+  game.events.onRotate = () => {
+    rotateSE.currentTime = 0;
+    rotateSE.play().catch(() => {});
   };
   game.events.onLock = () => {
     renderer.shake(3);
+    landSE.currentTime = 0;
+    landSE.play().catch(() => {});
   };
   game.events.onAllClear = () => {
     renderer.showAllClear();
@@ -108,6 +137,10 @@ async function main(): Promise<void> {
       setBest(score);
       localStorage.setItem(BEST_KEY, String(score));
     }
+    bgm.pause();
+    bgm.currentTime = 0;
+    gameoverSE.currentTime = 0;
+    gameoverSE.play().catch(() => {});
     renderer.shake(16);
     startRankingFlow(score);
   };
@@ -122,13 +155,15 @@ async function main(): Promise<void> {
       if (!starting) return;
       starting = false;
       game.start();
+      bgm.currentTime = 0;
+      bgm.play().catch(() => {});
     };
     jingle.onended = go;
     jingle.currentTime = 0;
     jingle.play().catch(go);
     setTimeout(go, 8000);
   };
-  const goTitle = (): void => game.goTitle();
+  const goTitle = (): void => { bgm.pause(); bgm.currentTime = 0; game.goTitle(); };
   new GestureInput(renderer.app.canvas, game, renderer, beginStart, goTitle, openRanking);
 
   // リサイズ
