@@ -37,6 +37,11 @@ async function main(): Promise<void> {
   const gameoverSE = new Audio(`${import.meta.env.BASE_URL}gameover.wav`);
   gameoverSE.volume = 0.6;
 
+  // ボタンSE（START/REPLAY以外の全ボタン共通）
+  const btnSE = new Audio(`${import.meta.env.BASE_URL}button_select.wav`);
+  btnSE.volume = 0.6;
+  const playBtnSE = (): void => { btnSE.currentTime = 0; btnSE.play().catch(() => {}); };
+
   // ハイスコア読み込み
   setBest(Number(localStorage.getItem(BEST_KEY) || 0));
 
@@ -45,11 +50,12 @@ async function main(): Promise<void> {
     entries: { rank: number; name: string; score: number; timestamp: string }[],
     highlightIdx: number,
   ): void => {
-    renderer.showRanking(entries, highlightIdx, () => {});
+    renderer.showRanking(entries, highlightIdx, () => { playBtnSE(); });
   };
 
   // ローディング付きランキング取得→表示（タイムアウト時リトライ/スキップ対応）
   const openRanking = (): void => {
+    playBtnSE();
     renderer.showLoading();
     fetchRankings()
       .then((res) => {
@@ -57,7 +63,7 @@ async function main(): Promise<void> {
         showRanking(res.rankings, -1);
       })
       .catch(() => {
-        renderer.showLoadingTimeout(openRanking, () => renderer.hideLoading());
+        renderer.showLoadingTimeout(openRanking, () => { playBtnSE(); renderer.hideLoading(); });
       });
   };
 
@@ -82,6 +88,7 @@ async function main(): Promise<void> {
           showNameInput(
             score,
             (name) => {
+              playBtnSE();
               // 登録フロー
               const doSubmit = (): void => {
                 renderer.showLoading();
@@ -94,19 +101,22 @@ async function main(): Promise<void> {
                     showRanking(res2.rankings, idx);
                   })
                   .catch(() => {
-                    renderer.showLoadingTimeout(doSubmit, () => {
-                      renderer.hideLoading();
-                      showRanking(top, -1);
-                    });
+                    renderer.showLoadingTimeout(
+                      () => { playBtnSE(); doSubmit(); },
+                      () => { playBtnSE(); renderer.hideLoading(); showRanking(top, -1); },
+                    );
                   });
               };
               doSubmit();
             },
-            () => showRanking(top, -1),
+            () => { playBtnSE(); showRanking(top, -1); },
           );
         })
         .catch(() => {
-          renderer.showLoadingTimeout(fetchAndCheck, () => renderer.hideLoading());
+          renderer.showLoadingTimeout(
+            () => { playBtnSE(); fetchAndCheck(); },
+            () => { playBtnSE(); renderer.hideLoading(); },
+          );
         });
     };
 
@@ -163,7 +173,7 @@ async function main(): Promise<void> {
     jingle.play().catch(go);
     setTimeout(go, 8000);
   };
-  const goTitle = (): void => { bgm.pause(); bgm.currentTime = 0; game.goTitle(); };
+  const goTitle = (): void => { playBtnSE(); bgm.pause(); bgm.currentTime = 0; game.goTitle(); };
   new GestureInput(renderer.app.canvas, game, renderer, beginStart, goTitle, openRanking);
 
   // リサイズ
