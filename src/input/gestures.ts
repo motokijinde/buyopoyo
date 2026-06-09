@@ -36,6 +36,9 @@ export class GestureInput {
     private onStartOrRetry: () => void,
     private onGoTitle: () => void,
     private onRanking: () => void,
+    private onPause: () => void,
+    private onResume: () => void,
+    private onQuit: () => void,
     private tune: GestureTune = DEFAULT_GESTURE_TUNE,
   ) {
     canvas.addEventListener("pointerdown", this.onDown, { passive: false });
@@ -51,13 +54,28 @@ export class GestureInput {
     // オーバーレイはフェーズに関わらず最優先で判定
     if (this.renderer.tryPressLoadingBtn(e.clientX, e.clientY)) return;
     if (this.renderer.tryPressRankingClose(e.clientX, e.clientY)) return;
+    // ポーズ中はつづけるボタン以外をブロック
+    if (this.game.isPaused) {
+      if (!this.renderer.tryPressResumeBtn(e.clientX, e.clientY, this.onResume)) {
+        this.renderer.tryPressQuitBtn(e.clientX, e.clientY, this.onQuit);
+      }
+      return;
+    }
     if (this.game.phase === "title") {
       if (this.renderer.tryPressTitleRankingBtn(e.clientX, e.clientY, this.onRanking)) return;
       this.renderer.tryPressTitleBtn(e.clientX, e.clientY, this.onStartOrRetry);
       return;
     }
     if (this.game.phase === "gameover") {
-      this.renderer.tryPressGameoverBtn(e.clientX, e.clientY, this.onStartOrRetry, this.onRanking, this.onGoTitle);
+      this.renderer.tryPressGameoverBtn(e.clientX, e.clientY, this.onStartOrRetry, this.onGoTitle);
+      return;
+    }
+    // スコアエリアタップでポーズ
+    if (
+      (this.game.phase === "control" || this.game.phase === "resolving") &&
+      this.renderer.tryPressPauseArea(e.clientX, e.clientY)
+    ) {
+      this.onPause();
       return;
     }
     this.touch = {

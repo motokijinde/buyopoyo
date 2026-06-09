@@ -70,6 +70,7 @@ export class Game {
   cleared = 0;
   level = 1;
   chain = 0;
+  isPaused = false;
 
   events: GameEvents = {};
 
@@ -99,7 +100,19 @@ export class Game {
   }
 
   goTitle(): void {
+    this.isPaused = false;
     this.phase = "title";
+  }
+
+  pause(): void {
+    if (this.phase !== "control" && this.phase !== "resolving") return;
+    this.isPaused = true;
+  }
+
+  resume(): void {
+    this.isPaused = false;
+    this.fallTimer = 0;
+    this.lockTimer = 0;
   }
 
   /** タイトルから新規開始 */
@@ -264,6 +277,7 @@ export class Game {
   }
 
   update(dt: number): void {
+    if (this.isPaused) return;
     if (this.phase === "control") {
       this.fallTimer += dt;
       if (this.fallTimer >= this.fallMs()) {

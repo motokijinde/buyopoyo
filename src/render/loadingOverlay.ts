@@ -62,7 +62,7 @@ export class LoadingOverlay extends Container {
     this.addChild(this.timeoutText);
 
     this.retryText = new Text({
-      text: "もう一度",
+      text: "つなぎなおす",
       style: { fill: "#ffffff", fontSize: 18, fontFamily: FONT, fontWeight: "bold",
                stroke: { color: "#1a5500", width: 4 } },
     });

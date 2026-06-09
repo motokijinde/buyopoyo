@@ -93,13 +93,13 @@ export function showNameInput(
           flex:3;position:relative;background:none;border:none;padding:0;cursor:pointer;
         ">
           <img src="${BASE}button-green.png" style="width:100%;height:100%;object-fit:fill;display:block;" />
-          ${btnSpan("登録する", "#1a5500", 18)}
+          ${btnSpan("けってい", "#1a5500", 18)}
         </button>
         <button id="byo-name-skip" class="byo-btn" style="
           flex:2;position:relative;background:none;border:none;padding:0;cursor:pointer;
         ">
           <img src="${BASE}button-red.png" style="width:100%;height:100%;object-fit:fill;display:block;" />
-          ${btnSpan("スキップ", "#881100", 16)}
+          ${btnSpan("とばす", "#881100", 16)}
         </button>
       </div>
     </div>

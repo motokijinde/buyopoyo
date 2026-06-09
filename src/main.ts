@@ -50,7 +50,7 @@ async function main(): Promise<void> {
     entries: { rank: number; name: string; score: number; timestamp: string }[],
     highlightIdx: number,
   ): void => {
-    renderer.showRanking(entries, highlightIdx, () => { playBtnSE(); });
+    renderer.showRanking(entries, highlightIdx, () => { playBtnSE(); renderer.enableGameoverBtns(); });
   };
 
   // ローディング付きランキング取得→表示（タイムアウト時リトライ/スキップ対応）
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
         .catch(() => {
           renderer.showLoadingTimeout(
             () => { playBtnSE(); fetchAndCheck(); },
-            () => { playBtnSE(); renderer.hideLoading(); },
+            () => { playBtnSE(); renderer.hideLoading(); renderer.enableGameoverBtns(); },
           );
         });
     };
@@ -174,7 +174,12 @@ async function main(): Promise<void> {
     setTimeout(go, 8000);
   };
   const goTitle = (): void => { playBtnSE(); bgm.pause(); bgm.currentTime = 0; game.goTitle(); };
-  new GestureInput(renderer.app.canvas, game, renderer, beginStart, goTitle, openRanking);
+  const pause = (): void => { playBtnSE(); game.pause(); bgm.pause(); };
+  const resume = (): void => {
+    game.resume();
+    if (game.phase === "control" || game.phase === "resolving") bgm.play().catch(() => {});
+  };
+  new GestureInput(renderer.app.canvas, game, renderer, beginStart, goTitle, openRanking, pause, resume, goTitle);
 
   // リサイズ
   window.addEventListener("resize", () => renderer.resize());
